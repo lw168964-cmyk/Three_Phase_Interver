@@ -8,7 +8,7 @@
 typedef float fp32;
 typedef double fp64;
 
-#define CTRL_FREQUENCY 10000   //控制频率
+#define CTRL_FREQUENCY 20000U  // One control update per 20 kHz PWM carrier.
 #define CTRL_DT (fp32)(1.0f / CTRL_FREQUENCY)//控制周期
 
 /*PID控制器结构体*/

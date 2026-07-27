@@ -52,21 +52,24 @@ void MX_ADC1_Init(void)
   hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
   hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc1.Init.LowPowerAutoWait = DISABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;              //ADC同步:关闭自由跑,改由HRTIM载波触发
+  hadc1.Init.ContinuousConvMode = DISABLE;              // One scan is started by each HRTIM trigger.
   hadc1.Init.NbrOfConversion = 4;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
-  //触发源改为HRTIM ADC触发1(=Timer A PERIOD/波峰,经postscaler /2 -> 10kHz)
-  //采样点锁在载波波峰(中心对齐零矢量正中),电感电流恰为其均值,天然去开关纹波
-  //触发与控制环路配置见hrtim.c USER CODE BEGIN HRTIM1_Init 2
+  //HRTIM TRG1 is generated at the PWM valley once per 20 kHz carrier cycle.
+  //The DMA complete callback runs the controller after this full scan finishes.
   hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIG_HRTIM_TRG1;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
   hadc1.Init.DMAContinuousRequests = ENABLE;
-  hadc1.Init.Overrun = ADC_OVR_DATA_PRESERVED;
-  hadc1.Init.OversamplingMode = ENABLE;
-  hadc1.Init.Oversampling.Ratio = ADC_OVERSAMPLING_RATIO_16;
-  hadc1.Init.Oversampling.RightBitShift = ADC_RIGHTBITSHIFT_NONE;
-  hadc1.Init.Oversampling.TriggeredMode = ADC_TRIGGEREDMODE_SINGLE_TRIGGER;
-  hadc1.Init.Oversampling.OversamplingStopReset = ADC_REGOVERSAMPLING_CONTINUED_MODE;
+  /* 循环DMA下必须用OVERWRITTEN。OVRMOD=0(DATA_PRESERVED)时溢出的那次转换结果被丢弃
+     且不产生DMA请求,DMA指针推进次数就比转换次数少,ADC1_Value[0..3]与rank的对应关系
+     从此永久错位(AB线电压变成A相电流),复位前不会自愈。
+     注:HAL_ADC_Start_DMA无条件使能ADC_IT_OVR(stm32g4xx_hal_adc.c:2092),
+     所以下面必须同时打开ADC1_2_IRQn,否则溢出时中断永远进不来,
+     HAL_ADC_ErrorCallback不执行,故障完全不可见。 */
+  hadc1.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
+  /* Four 12-bit conversions take about 3.5 us at 42.5 MHz, leaving ample
+     time for the 20 kHz control ISR before the next PWM update boundary. */
+  hadc1.Init.OversamplingMode = DISABLE;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
     Error_Handler();
@@ -179,7 +182,9 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* adcHandle)
     __HAL_LINKDMA(adcHandle,DMA_Handle,hdma_adc1);
 
   /* USER CODE BEGIN ADC1_MspInit 1 */
-
+    /* ADC溢出中断。优先级低于DMA1_Channel1(控制环),它只做统计和恢复,不能抢控制环。 */
+    HAL_NVIC_SetPriority(ADC1_2_IRQn, 2, 0);
+    HAL_NVIC_EnableIRQ(ADC1_2_IRQn);
   /* USER CODE END ADC1_MspInit 1 */
   }
 }

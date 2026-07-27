@@ -1,5 +1,6 @@
 #include "svpwm.h"
 #include "hrtim.h"
+#include <math.h>
 
 //占空比保护限幅(仅防极限,不做幅值压缩)
 #define DUTY_MIN 0.02f
@@ -7,6 +8,7 @@
 
 static float duty_clip(float d)
 {
+    if (!isfinite(d)) return 0.5f;
     if (d < DUTY_MIN) return DUTY_MIN;
     if (d > DUTY_MAX) return DUTY_MAX;
     return d;
@@ -169,7 +171,7 @@ void my_svpwm_calc(SVPWM_STRUCT *p, float alpha, float beta)
 void update_hrtim_duty(float dutyA, float dutyB, float dutyC)
 {
 
-  uint32_t period = 17000;
+  const uint32_t period = HRTIM_PWM_PERIOD_TICKS;
 
 	//防御性限幅:占空比为负时float转uint32会回绕成极大值,导致占空比跳到满量程
 	dutyA = duty_clip(dutyA);

@@ -30,4 +30,7 @@ void OLEDUI_Refresh(void);
 // UI按键处理函数：读取按键状态，根据当前UI状态执行对应操作（切换界面/调节参数）
 void OLEDUI_Key_Handle(void);
 
+// 把Line_f1应用到角度发生器和PR谐振系数(改频率后必须调用)
+void OLEDUI_Apply_Freq(void);
+
 #endif /* __OLEDUI_H */

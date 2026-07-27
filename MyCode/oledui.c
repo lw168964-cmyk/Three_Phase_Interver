@@ -4,6 +4,7 @@
 #include "suanfa.h"
 #include "control.h"
 #include "inital.h"
+#include "svpwm.h"
 //                               按键位置
 //
 //                       |PB6|               |PB4|               
@@ -21,10 +22,81 @@ float Line_U1_Measure = 24.00f;   // 输出电压（测量值）(要改)
 float Line_I1 = 0.00f;                              // I1干路电流
 float Line_f1 = 50.00f;                             // 频率（默认50Hz）
 
+#define HRTIM_ACTIVE_OUTPUTS \
+    (HRTIM_OUTPUT_TA1 | HRTIM_OUTPUT_TA2 | HRTIM_OUTPUT_TB1 | \
+     HRTIM_OUTPUT_TB2 | HRTIM_OUTPUT_TC1 | HRTIM_OUTPUT_TC2)
+#define HRTIM_ACTIVE_COUNTERS \
+    (HRTIM_TIMERID_MASTER | HRTIM_TIMERID_TIMER_A | \
+     HRTIM_TIMERID_TIMER_B | HRTIM_TIMERID_TIMER_C)
+#define HRTIM_PWM_UPDATES \
+    (HRTIM_TIMERUPDATE_A | HRTIM_TIMERUPDATE_B | HRTIM_TIMERUPDATE_C)
+#define HRTIM_PWM_RESETS \
+    (HRTIM_TIMERRESET_MASTER | HRTIM_TIMERRESET_TIMER_A | \
+     HRTIM_TIMERRESET_TIMER_B | HRTIM_TIMERRESET_TIMER_C)
+
 // -------------------------- 私有函数声明--------------------------------
 static void UI_Show_Start(void);                    // 显示"开始界面"
 static void UI_Show_Measure(void);               // 显示"参数显示界面"
 static void UI_Show_Set(void);               // 显示"参数显示界面"
+static void HRTIM_ApplyNeutralState(void);
+static void HRTIM_ForcePrimaryOutputsInactive(void);
+
+/* Outputs must be disabled before this function is called. */
+static void HRTIM_ApplyNeutralState(void)
+{
+    update_hrtim_duty(0.5f, 0.5f, 0.5f);
+
+    /* Apply the preload and reset all counters, so the next start begins at
+       a known PWM valley instead of resuming from the former stop phase. */
+    if (HAL_HRTIM_SoftwareUpdate(&hhrtim1, HRTIM_PWM_UPDATES) != HAL_OK)
+    {
+        Error_Handler();
+    }
+    if (HAL_HRTIM_SoftwareReset(&hhrtim1, HRTIM_PWM_RESETS) != HAL_OK)
+    {
+        Error_Handler();
+    }
+}
+
+/* With dead-time insertion enabled, force the primary output state before
+   entering RUN so HRTIM establishes the complementary state deterministically. */
+static void HRTIM_ForcePrimaryOutputsInactive(void)
+{
+    if ((HAL_HRTIM_WaveformSetOutputLevel(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A,
+                                           HRTIM_OUTPUT_TA1, HRTIM_OUTPUTLEVEL_INACTIVE) != HAL_OK) ||
+        (HAL_HRTIM_WaveformSetOutputLevel(&hhrtim1, HRTIM_TIMERINDEX_TIMER_B,
+                                           HRTIM_OUTPUT_TB1, HRTIM_OUTPUTLEVEL_INACTIVE) != HAL_OK) ||
+        (HAL_HRTIM_WaveformSetOutputLevel(&hhrtim1, HRTIM_TIMERINDEX_TIMER_C,
+                                           HRTIM_OUTPUT_TC1, HRTIM_OUTPUTLEVEL_INACTIVE) != HAL_OK))
+    {
+        Error_Handler();
+    }
+}
+/* 改频率时统一走这里:角度发生器 + PR谐振系数必须一起更新。
+   原先只调fixed_angle_init(),PR的omiga_0留在2*pi*50不动,偏离50Hz后
+   |PR|从30.2掉到个位数,退化成Kp=0.2的纯比例。
+
+   与fixed_angle_init()的两点区别:
+   1. 保留theta。fixed_angle_init会把theta清零,运行中改频率就是一次相位跳变,
+      对2mH/2uF这种ζ极小的LC是一记阶跃冲击。改频率只该改角速度,不该动当前相位。
+   2. 整组更新期间屏蔽中断。ISR每周期读theta/w/Fo,非原子更新会让某一拍用到
+      新w配旧Fo(RMS窗口)的混搭状态。 */
+void OLEDUI_Apply_Freq(void)
+{
+    uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
+    dianjiaodu.w  = 2.0f * 3.1415926f * Line_f1;
+    dianjiaodu.Ts = 1.0f / (float)CTRL_FREQUENCY;
+    dianjiaodu.Fo = (uint16_t)Line_f1;
+    if (primask == 0U)
+    {
+        __enable_irq();
+    }
+
+    Control_SetFundamentalFreq(Line_f1);
+}
+
 // -------------------------- UI初始化函数 -------------------------------
 void OLEDUI_Init(void) {
     OLED_Init();          // 初始化OLED
@@ -84,32 +156,32 @@ void OLEDUI_Key_Handle(void) {
         case UI_Set:
             if (key_up && Line_f1 <= 100) {  // 增加：频率+1（上限100Hz）
                 Line_f1 = Line_f1 + 1.0f;
-							fixed_angle_init(&dianjiaodu,Line_f1,10000); //初始化电角度结构体
+							OLEDUI_Apply_Freq();
                 OLEDUI_Refresh(); // 刷新参数显示
             }
             if (key_down && Line_f1 >= 20) { // 减少：频率-1（下限20Hz）
                 Line_f1 = Line_f1 - 1.0f;
-							fixed_angle_init(&dianjiaodu,Line_f1,10000); //初始化电角度结构体
+							OLEDUI_Apply_Freq();
                 OLEDUI_Refresh(); // 刷新参数显示
-							
+
             }
             if (key_ok) {          // 确认：进入单网测量界面
                 g_current_ui = UI_Measure;
-								//控制环路已改由HRTIM波峰->ADC-DMA完成回调驱动(见control.c),不再用TIM6
-
-								HAL_HRTIM_WaveformCounterStart(&hhrtim1,HRTIM_TIMERID_MASTER);//开启通道输出
-								HAL_HRTIM_WaveformCounterStart(&hhrtim1,HRTIM_TIMERID_TIMER_A);
-								HAL_HRTIM_WaveformOutputStart(&hhrtim1,HRTIM_OUTPUT_TA1|HRTIM_OUTPUT_TA2);
-								HAL_HRTIM_SimplePWMStart(&hhrtim1,HRTIM_TIMERINDEX_TIMER_A,HRTIM_OUTPUT_TA1|HRTIM_OUTPUT_TA2);
-
-
-								HAL_HRTIM_WaveformCounterStart(&hhrtim1,HRTIM_TIMERID_TIMER_B);
-								HAL_HRTIM_WaveformOutputStart(&hhrtim1,HRTIM_OUTPUT_TB1|HRTIM_OUTPUT_TB2);
-								HAL_HRTIM_SimplePWMStart(&hhrtim1,HRTIM_TIMERINDEX_TIMER_B,HRTIM_OUTPUT_TB1|HRTIM_OUTPUT_TB2);
-								
-								HAL_HRTIM_WaveformCounterStart(&hhrtim1,HRTIM_TIMERID_TIMER_C);
-								HAL_HRTIM_WaveformOutputStart(&hhrtim1,HRTIM_OUTPUT_TC1|HRTIM_OUTPUT_TC2);
-								HAL_HRTIM_SimplePWMStart(&hhrtim1,HRTIM_TIMERINDEX_TIMER_C,HRTIM_OUTPUT_TC1|HRTIM_OUTPUT_TC2);
+								/* Start from a zero line-voltage state. The first ADC DMA callback
+								   ramps the closed loop instead of reusing stale controller state. */
+								Control_Reset();
+								HRTIM_ApplyNeutralState();
+								if (HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_ACTIVE_OUTPUTS) != HAL_OK)
+								{
+									Error_Handler();
+								}
+								HRTIM_ForcePrimaryOutputsInactive();
+								if (HAL_HRTIM_WaveformCountStart(&hhrtim1, HRTIM_ACTIVE_COUNTERS) != HAL_OK)
+								{
+									HAL_HRTIM_WaveformOutputStop(&hhrtim1, HRTIM_ACTIVE_OUTPUTS);
+									Error_Handler();
+								}
+								Control_Enable();
                 OLEDUI_Refresh();
             }
             if (key_back) {        // 返回：回到开始界面
@@ -121,12 +193,12 @@ void OLEDUI_Key_Handle(void) {
         case UI_Measure:
             if (key_up && Line_f1 <= 100) {  // 增加：频率+1（上限100Hz）
                 Line_f1 = Line_f1 + 1.0f;
-							fixed_angle_init(&dianjiaodu,Line_f1,10000); //初始化电角度结构体
+							OLEDUI_Apply_Freq();
                 OLEDUI_Refresh(); // 刷新参数显示
             }
             if (key_down && Line_f1 >= 20) { // 减少：频率-1（下限20Hz）
                 Line_f1 = Line_f1 - 1.0f;
-							fixed_angle_init(&dianjiaodu,Line_f1,10000); //初始化电角度结构体
+							OLEDUI_Apply_Freq();
                 OLEDUI_Refresh(); // 刷新参数显示
             }
             if (key_ok) {          // 确认：进入单网测量界面
@@ -134,14 +206,18 @@ void OLEDUI_Key_Handle(void) {
             }
             if (key_back) {        // 返回：回到开始界面
                 g_current_ui = UI_Set;
-								//停HRTIM即停ADC波峰触发,控制环路随之停止,无需再操作TIM6
-								HAL_HRTIM_WaveformCounterStop(&hhrtim1,HRTIM_TIMERID_MASTER);
-								HAL_HRTIM_WaveformCounterStop(&hhrtim1,HRTIM_TIMERID_TIMER_A);
-								HAL_HRTIM_WaveformCounterStop(&hhrtim1,HRTIM_TIMERID_TIMER_B);
-								HAL_HRTIM_WaveformCounterStop(&hhrtim1,HRTIM_TIMERID_TIMER_C);
-								HAL_HRTIM_WaveformOutputStop(&hhrtim1,HRTIM_OUTPUT_TC1|HRTIM_OUTPUT_TC2);
-								HAL_HRTIM_WaveformOutputStop(&hhrtim1,HRTIM_OUTPUT_TB1|HRTIM_OUTPUT_TB2);
-								HAL_HRTIM_WaveformOutputStop(&hhrtim1,HRTIM_OUTPUT_TA1|HRTIM_OUTPUT_TA2);
+								/* Outputs must be disabled before a waveform counter can stop. */
+								Control_Disable();
+								if (HAL_HRTIM_WaveformOutputStop(&hhrtim1, HRTIM_ACTIVE_OUTPUTS) != HAL_OK)
+								{
+									Error_Handler();
+								}
+								if (HAL_HRTIM_WaveformCountStop(&hhrtim1, HRTIM_ACTIVE_COUNTERS) != HAL_OK)
+								{
+									Error_Handler();
+								}
+								Control_Reset();
+								HRTIM_ApplyNeutralState();
                 OLEDUI_Refresh();
             }
             break;

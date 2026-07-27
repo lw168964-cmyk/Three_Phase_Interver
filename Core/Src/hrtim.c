@@ -59,7 +59,8 @@ void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
-  pTimeBaseCfg.Period = 17000;
+  /* The master period is one complete 20 kHz PWM cycle (50 us). */
+  pTimeBaseCfg.Period = HRTIM_PWM_PERIOD_TICKS;
   pTimeBaseCfg.RepetitionCounter = 0x00;
   pTimeBaseCfg.PrescalerRatio = HRTIM_PRESCALERRATIO_MUL4;
   pTimeBaseCfg.Mode = HRTIM_MODE_CONTINUOUS;
@@ -86,26 +87,25 @@ void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
+
+  /* A/B/C use one up-counting 20 kHz period. CMP1 is the direct duty value. */
+  pTimeBaseCfg.Period = HRTIM_PWM_PERIOD_TICKS;
   if (HAL_HRTIM_TimeBaseConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, &pTimeBaseCfg) != HAL_OK)
   {
     Error_Handler();
   }
-  pTimerCtl.UpDownMode = HRTIM_TIMERUPDOWNMODE_UPDOWN;
+  pTimerCtl.UpDownMode = HRTIM_TIMERUPDOWNMODE_UP;
   pTimerCtl.GreaterCMP1 = HRTIM_TIMERGTCMP1_EQUAL;
   pTimerCtl.DualChannelDacEnable = HRTIM_TIMER_DCDE_DISABLED;
   if (HAL_HRTIM_WaveformTimerControl(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, &pTimerCtl) != HAL_OK)
   {
     Error_Handler();
   }
-  if (HAL_HRTIM_RollOverModeConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, HRTIM_TIM_FEROM_BOTH|HRTIM_TIM_BMROM_BOTH
-                              |HRTIM_TIM_ADROM_CREST|HRTIM_TIM_OUTROM_BOTH
-                              |HRTIM_TIM_ROM_BOTH) != HAL_OK)
-  {
-    Error_Handler();
-  }
   pTimerCfg.InterruptRequests = HRTIM_TIM_IT_NONE;
   pTimerCfg.DMARequests = HRTIM_TIM_DMA_NONE;
   pTimerCfg.PreloadEnable = HRTIM_PRELOAD_ENABLED;
+  /* CMP preload values written by the ADC-DMA ISR are committed at the next
+     20 kHz period boundary, never during the active PWM period. */
   pTimerCfg.RepetitionUpdate = HRTIM_UPDATEONREPETITION_ENABLED;
   pTimerCfg.PushPull = HRTIM_TIMPUSHPULLMODE_DISABLED;
   pTimerCfg.FaultEnable = HRTIM_TIMFAULTENABLE_NONE;
@@ -113,8 +113,11 @@ void MX_HRTIM1_Init(void)
   pTimerCfg.DeadTimeInsertion = HRTIM_TIMDEADTIMEINSERTION_ENABLED;
   pTimerCfg.DelayedProtectionMode = HRTIM_TIMER_A_B_C_DELAYEDPROTECTION_DISABLED;
   pTimerCfg.UpdateTrigger = HRTIM_TIMUPDATETRIGGER_NONE;
-  pTimerCfg.ResetTrigger = HRTIM_TIMRESETTRIGGER_MASTER_PER;
-  pTimerCfg.ResetUpdate = HRTIM_TIMUPDATEONRESET_ENABLED;
+  /* All timers are software-reset then started together. Do not reset a slave
+     at the same instant as its own period event: that would make event order
+     dependent and is unnecessary because they share the same HRTIM clock. */
+  pTimerCfg.ResetTrigger = HRTIM_TIMRESETTRIGGER_NONE;
+  pTimerCfg.ResetUpdate = HRTIM_TIMUPDATEONRESET_DISABLED;
   if (HAL_HRTIM_WaveformTimerConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, &pTimerCfg) != HAL_OK)
   {
     Error_Handler();
@@ -127,7 +130,7 @@ void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
-  pCompareCfg.CompareValue = 8500;
+  pCompareCfg.CompareValue = HRTIM_PWM_PERIOD_TICKS / 2U;
   if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, &pCompareCfg) != HAL_OK)
   {
     Error_Handler();
@@ -154,7 +157,9 @@ void MX_HRTIM1_Init(void)
     Error_Handler();
   }
   pOutputCfg.Polarity = HRTIM_OUTPUTPOLARITY_HIGH;
-  pOutputCfg.SetSource = HRTIM_OUTPUTSET_TIMPER;
+  /* Master PER is the common carrier-zero boundary. Each leg goes active at
+     that boundary and inactive at its own CMP1, so CMP1/PER is its duty. */
+  pOutputCfg.SetSource = HRTIM_OUTPUTSET_MASTERPER;
   pOutputCfg.ResetSource = HRTIM_OUTPUTRESET_TIMCMP1;
   pOutputCfg.IdleMode = HRTIM_OUTPUTIDLEMODE_NONE;
   pOutputCfg.IdleLevel = HRTIM_OUTPUTIDLELEVEL_INACTIVE;
@@ -195,12 +200,6 @@ void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_HRTIM_RollOverModeConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_B, HRTIM_TIM_FEROM_BOTH|HRTIM_TIM_BMROM_BOTH
-                              |HRTIM_TIM_ADROM_BOTH|HRTIM_TIM_OUTROM_BOTH
-                              |HRTIM_TIM_ROM_BOTH) != HAL_OK)
-  {
-    Error_Handler();
-  }
   if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, &pCompareCfg) != HAL_OK)
   {
     Error_Handler();
@@ -213,28 +212,35 @@ void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_HRTIM_RollOverModeConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_C, HRTIM_TIM_FEROM_BOTH|HRTIM_TIM_BMROM_BOTH
-                              |HRTIM_TIM_ADROM_BOTH|HRTIM_TIM_OUTROM_BOTH
-                              |HRTIM_TIM_ROM_BOTH) != HAL_OK)
-  {
-    Error_Handler();
-  }
   if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_C, HRTIM_COMPAREUNIT_1, &pCompareCfg) != HAL_OK)
   {
     Error_Handler();
   }
   /* USER CODE BEGIN HRTIM1_Init 2 */
   //===== ADC采样与载波对齐 =====
-  //Timer A上下计数,PERIOD事件=计数到顶=载波波峰(crest),中心对齐PWM此刻为零矢量正中,
-  //电感电流恰为开关周期均值,采样点锁此处天然滤除开关纹波,消除混叠。
+  /* ADC trigger point: keep the 20 kHz trigger synchronous, but move it away
+     from the MASTERPER edge where all three bridge legs commutate. */
+  pCompareCfg.CompareValue = HRTIM_ADC_SAMPLE_DELAY_TICKS;
+  if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_MASTER,
+                                       HRTIM_COMPAREUNIT_1, &pCompareCfg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  //Master CMP1 is 3.60 us after the A/B/C valley. This preserves one sample
+  //per carrier while avoiding the common switching edge at counter = 0.
+  //One HRTIM trigger starts one four-channel ADC scan per complete PWM cycle.
   HRTIM_ADCTriggerCfgTypeDef pADCTriggerCfg = {0};
-  pADCTriggerCfg.UpdateSource = HRTIM_ADCTRIGGERUPDATE_TIMER_A;
-  pADCTriggerCfg.Trigger      = HRTIM_ADCTRIGGEREVENT13_TIMERA_PERIOD;
-  HAL_HRTIM_ADCTriggerConfig(&hhrtim1, HRTIM_ADCTRIGGER_1, &pADCTriggerCfg);
-  //postscaler=1 -> 每2个载波周期(2*50us)触发一次ADC = 10kHz,
-  //与CTRL_DT/电角度步进/RMS采样率完全一致,PR与电流环调参不受影响。
-  //(20kHz每周期都触发的话,4通道*16过采样约56us的ADC序列塞不进50us,会overrun)
-  HAL_HRTIM_ADCPostScalerConfig(&hhrtim1, HRTIM_ADCTRIGGER_1, 1);
+  pADCTriggerCfg.UpdateSource = HRTIM_ADCTRIGGERUPDATE_MASTER;
+  pADCTriggerCfg.Trigger      = HRTIM_ADCTRIGGEREVENT13_MASTER_CMP1;
+  if (HAL_HRTIM_ADCTriggerConfig(&hhrtim1, HRTIM_ADCTRIGGER_1, &pADCTriggerCfg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_HRTIM_ADCPostScalerConfig(&hhrtim1, HRTIM_ADCTRIGGER_1, 0) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE END HRTIM1_Init 2 */
   HAL_HRTIM_MspPostInit(&hhrtim1);
 

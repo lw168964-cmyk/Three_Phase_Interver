@@ -36,6 +36,23 @@ extern HRTIM_HandleTypeDef hhrtim1;
 
 /* USER CODE BEGIN Private defines */
 
+/* HRTIM runs from 170 MHz x4 = 680 MHz. */
+#define HRTIM_PWM_FREQUENCY_HZ       20000U
+#define HRTIM_PWM_TIMER_CLOCK_HZ     680000000UL
+#define HRTIM_PWM_PERIOD_TICKS       \
+    (HRTIM_PWM_TIMER_CLOCK_HZ / HRTIM_PWM_FREQUENCY_HZ)
+
+/* ADC must stay synchronous with the carrier, but it must not sample on the
+ * common bridge commutation at counter zero. 2450 ticks is about 3.60 us,
+ * nominally just after the configured 3.29 us dead time. Verify the complete
+ * four-channel acquisition window against the minimum zero-vector time on the
+ * oscilloscope before changing either modulation limit or dead time. */
+#define HRTIM_ADC_SAMPLE_DELAY_TICKS 2450U
+
+#if HRTIM_ADC_SAMPLE_DELAY_TICKS >= HRTIM_PWM_PERIOD_TICKS
+#error "The ADC sample delay must stay inside one PWM period."
+#endif
+
 /* USER CODE END Private defines */
 
 void MX_HRTIM1_Init(void);

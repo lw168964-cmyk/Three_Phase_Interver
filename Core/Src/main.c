@@ -141,10 +141,10 @@ int main(void)
   /* USER CODE BEGIN 2 */
 	OLEDUI_Init();
 	
-	fixed_angle_init(&dianjiaodu,50,10000); //初始化电角度结构体
-	
-  PR_Init(&PR_Volt_PhaseA);
-  PR_Init(&PR_Volt_PhaseC);
+	fixed_angle_init(&dianjiaodu,Line_f1,CTRL_FREQUENCY); //初始化电角度结构体
+
+	//角度发生器与PR谐振系数统一由Line_f1推出,避免改默认值后两边脱节
+	OLEDUI_Apply_Freq();
 	my_svpwm_Init(&SVPWM);
 	
 	HAL_ADCEx_Calibration_Start(&hadc1,ADC_SINGLE_ENDED);//ADC校准
@@ -156,17 +156,17 @@ int main(void)
 
 //	HAL_TIM_Base_Start_IT(&htim6);    //开启定时中断
 //	
-//	HAL_HRTIM_WaveformCounterStart(&hhrtim1,HRTIM_TIMERID_MASTER);//开启通道输出
-//	HAL_HRTIM_WaveformCounterStart(&hhrtim1,HRTIM_TIMERID_TIMER_A);
+//	HAL_HRTIM_WaveformCountStart(&hhrtim1,HRTIM_TIMERID_MASTER);//开启通道输出
+//	HAL_HRTIM_WaveformCountStart(&hhrtim1,HRTIM_TIMERID_TIMER_A);
 //	HAL_HRTIM_WaveformOutputStart(&hhrtim1,HRTIM_OUTPUT_TA1|HRTIM_OUTPUT_TA2);
 //	HAL_HRTIM_SimplePWMStart(&hhrtim1,HRTIM_TIMERINDEX_TIMER_A,HRTIM_OUTPUT_TA1|HRTIM_OUTPUT_TA2);
 
 
-//	HAL_HRTIM_WaveformCounterStart(&hhrtim1,HRTIM_TIMERID_TIMER_B);
+//	HAL_HRTIM_WaveformCountStart(&hhrtim1,HRTIM_TIMERID_TIMER_B);
 //	HAL_HRTIM_WaveformOutputStart(&hhrtim1,HRTIM_OUTPUT_TB1|HRTIM_OUTPUT_TB2);
 //	HAL_HRTIM_SimplePWMStart(&hhrtim1,HRTIM_TIMERINDEX_TIMER_B,HRTIM_OUTPUT_TB1|HRTIM_OUTPUT_TB2);
 //	
-//	HAL_HRTIM_WaveformCounterStart(&hhrtim1,HRTIM_TIMERID_TIMER_C);
+//	HAL_HRTIM_WaveformCountStart(&hhrtim1,HRTIM_TIMERID_TIMER_C);
 //	HAL_HRTIM_WaveformOutputStart(&hhrtim1,HRTIM_OUTPUT_TC1|HRTIM_OUTPUT_TC2);
 //	HAL_HRTIM_SimplePWMStart(&hhrtim1,HRTIM_TIMERINDEX_TIMER_C,HRTIM_OUTPUT_TC1|HRTIM_OUTPUT_TC2);
 	

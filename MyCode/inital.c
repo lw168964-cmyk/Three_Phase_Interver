@@ -20,7 +20,7 @@ ST_PR PR_Volt_PhaseA={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
 						  .fpUMax=40,.fpEMin= 0,  // 48V母线，相电压峰值约28V，限幅40V留余量
 						  .omiga_c=1*3.1415926f*5,.omiga_0=2*3.1415926f*50,  // 带宽收窄到5Hz,谐振峰变尖,50Hz处增益大增,消除稳态误差冲24V
 						  //Kp是宽带增益,同时决定外环对LC谐振峰的抑制量,不要往下调
-						  .Kp=0.5f,.Kr=25,
+						  .Kp=0.2f,.Kr=30,
 						  .fpDt=CTRL_DT};
 //A相电流P控制器（内环有源阻尼，输出为电压指令V）
 ST_PID P_Crt_PhaseA={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
@@ -36,7 +36,7 @@ ST_PR PR_Volt_PhaseC={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
 						  .pre_fpU=0,.pre_pre_fpU= 0,
 						  .fpUMax=40,.fpEMin= 0,  // 48V母线，相电压峰值约28V，限幅40V留余量
 						  .omiga_c=1*3.1415926f*5,.omiga_0=2*3.1415926f*50,  // 带宽收窄到5Hz,谐振峰变尖,50Hz处增益大增,消除稳态误差冲24V
-						  .Kp=0.5f,.Kr=25,  // 同A相
+						  .Kp=0.2f,.Kr=30,  // 同A相
 						  .fpDt=CTRL_DT};
 //C相电流P控制器（内环有源阻尼，输出为电压指令V）
 ST_PID P_Crt_PhaseC={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
