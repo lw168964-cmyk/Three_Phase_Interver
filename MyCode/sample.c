@@ -174,7 +174,13 @@ void Cal_ACVolt_AB(ST_ELEC_OBS *pstM)
 //BC线电压
 void Cal_ACVolt_BC(ST_ELEC_OBS *pstM)
 {
-	float raw = (float)((ADC1_Value[2])*3.3f/4096.f-1.656f)*29.94f;
+	/* 增益必须与Cal_ACVolt_AB一致(原为29.94, 与AB的30.0差0.20%)。
+	   Calculate_PhaseVoltage用这两路重构三相电压, 增益失配会在反馈里
+	   引入固定负序分量(实测0.2%失配 -> 0.12%负序), 外环拿含负序的反馈
+	   去调节, 会主动把输出调成三相不对称, 而THD指标看不出来。
+	   零点偏差(1.644 vs 1.656)由DC_TRACK慢跟踪消除, 无需强求一致。
+	   若两路实际分压比确有差异, 应在硬件上配对电阻, 而不是在这里补偿。 */
+	float raw = (float)((ADC1_Value[2])*3.3f/4096.f-1.656f)*30.f;
 	pstM->fpBCVoltDC += DC_TRACK_K * (raw - pstM->fpBCVoltDC);
 	raw -= pstM->fpBCVoltDC;
 	pstM->fpBCVolt += VOLT_FILT_K * (raw - pstM->fpBCVolt);

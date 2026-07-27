@@ -87,7 +87,18 @@ void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_1;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_24CYCLES_5;
+  /* 采样时间 24.5 -> 12.5 周期, 与 HRTIM_ADC_SAMPLE_DELAY_TICKS 的前移是一组改动。
+     原因: 单通道耗时 = (SMP+12.5)/42.5MHz, 24.5周期时四通道共 3.482us;
+     从原起点 3.60us 起扫需要前沿111零矢量窗口 >= 7.08us, 而窗口宽度
+     = (1-m)/2*T, m=0.71(默认24V)时仅 7.33us, m>=0.80 时只有 5.00us
+     -> rank2~rank4 落在桥臂换流过程中采样, 这是波形失真的直接原因。
+     改 12.5 周期后四通道共 2.353us, 配合起点前移到 0.80us, 扫描区间
+     0.80~3.15us, 即使 m=0.85(窗口3.75us) 仍有 0.60us 余量。
+     !! 代价: 采样窗口从 0.576us 缩到 0.294us, 12bit下源阻抗上限约 6.5k欧
+        (原 12.8k欧)。若分压网络/电流传感器输出阻抗超过此值, 会出现增益
+        性偏小误差, 此时应改回 24.5 周期并把线电压限制在 24.3V(m<=0.72)以内,
+        或改中心对齐PWM彻底解决。 */
+  sConfig.SamplingTime = ADC_SAMPLETIME_12CYCLES_5;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
