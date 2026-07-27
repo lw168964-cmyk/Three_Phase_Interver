@@ -35,6 +35,15 @@
 #define NOTCH_A2       (NOTCH_R*NOTCH_R)           //分母z^-2系数
 #define NOTCH_B1       (-2.0f*NOTCH_COS)           //分子z^-1系数(分子b0=b2=1)
 
+//基波同步解调状态
+typedef struct {
+    fp32 sumSin;      //与sin(theta)的相关累加
+    fp32 sumCos;      //与cos(theta)的相关累加
+    uint16_t n;        //本窗口已累加样本数
+    uint16_t lastFreq; //频率变化时重置窗口
+    fp32 lastRMS;     //上一窗口的结果(窗口未满时返回它)
+} FUND_RMS;
+
 //单路二阶陷波器状态(直接II型)
 typedef struct { fp32 w1, w2; } ST_NOTCH;
 fp32 Notch_Update(ST_NOTCH *s, fp32 x);
@@ -88,6 +97,15 @@ float RMS_Update(RMS_Calculator *calc, float newSample , uint16_t f) ;// 更新�
 
 
 float Calculate_ACCurrent_RMS_A(ST_ELEC_OBS *pstM,uint16_t f);//计算A相线电流有效值
+
+/* 基波有效值提取(同步解调)。
+   背景: 采样点取的是电感电流, 空载时开关纹波峰峰约0.25A, 而基波峰值只有
+   2*pi*50*12uF*19.6V = 0.074A —— 纹波比基波大数倍。直接对采样序列求RMS
+   得到的是"纹波+基波+噪声"的总有效值, 会把空载电流显示成几百mA甚至上A,
+   那不是流过负载的电流。
+   本函数用 sin/cos 与基波相关积分, 只留下与基波同频同相的分量, 纹波和
+   量化噪声因与基波不相关而被积分平均掉。theta 直接用控制环的电角度, 天然同步。 */
+float Fundamental_RMS_Update(FUND_RMS *s, float sample, float theta, uint16_t f);
 
 float Calculate_ACVoltage_RMS_AB(ST_ELEC_OBS *pstM,uint16_t f); //计算交流电压有效值 Uab
 float Calculate_ACVoltage_RMS_BC(ST_ELEC_OBS *pstM,uint16_t f); //计算交流电压有效值 Ubc

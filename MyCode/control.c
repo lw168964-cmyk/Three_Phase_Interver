@@ -23,7 +23,9 @@
 
 float Udc = 48.0f;//直流母线电压
 float Uab_rms=0;//AB线电压有效值
-float Ia_rms=0;//A相线电流有效值
+float Ia_rms=0;//A相线电流基波有效值(显示用)
+float Ia_rms_raw=0;//A相线电流原始RMS(含纹波,排查用)
+static FUND_RMS fund_Ia;//A相电流基波解调状态
 //目标值统一由oledui.c的Line_U1_Set(线电压有效值)给出,经调用处折算成相电压峰值传入des_d
 
 float D=0;
@@ -133,6 +135,8 @@ void Control_Reset(void)
 	dianjiaodu.theta = 0.0f;
 	Uab_rms = 0.0f;
 	Ia_rms = 0.0f;
+	Ia_rms_raw = 0.0f;
+	memset(&fund_Ia, 0, sizeof(fund_Ia));
 
 	Reset_PR_State(&PR_Volt_PhaseA);
 	Reset_PR_State(&PR_Volt_PhaseC);
@@ -266,7 +270,12 @@ void Volt_Loop_Control(float des_d,float des_q,float sita,uint16_t f) //单电�
 
 	//8.参数计算显示
 	Uab_rms = Calculate_ACVoltage_RMS_AB(&input_volt1,f);//计算AB线电压有效值
-	Ia_rms = Calculate_ACCurrent_RMS_A(&input_volt1,f);//计算A相线电流有效值
+	//电流显示必须用基波提取, 不能用原始RMS:
+	//采样的是电感电流, 空载纹波峰峰约0.25A > 基波峰值0.074A,
+	//原始RMS把纹波也算进去 -> 空载会显示成几百mA以上, 那不是负载电流。
+	Ia_rms = Fundamental_RMS_Update(&fund_Ia, input_volt1.fpPha1CrtFB, sita, f);
+	//原始RMS保留为排查用(调试器watch), 与Ia_rms的差值即纹波+噪声含量
+	Ia_rms_raw = Calculate_ACCurrent_RMS_A(&input_volt1,f);
 
 	//9.闭环调制
 	Clark_Func(&clark, Phase_A_out, Phase_B_out, Phase_C_out, 1);

@@ -1,5 +1,6 @@
 #include "sample.h"
 #include "main.h"
+#include "arm_math.h"
 #include "math.h"
 #include "string.h"
 
@@ -44,6 +45,45 @@ float RMS_Update(RMS_Calculator *calc, float newSample , uint16_t f)
     
     // 周期未满时返回上一次的RMS值
     return calc->lastRMS;
+}
+
+/* 基波同步解调: 在一个基波周期内做 sum(x*sin) 与 sum(x*cos),
+   幅值 = 2/N*sqrt(sumSin^2+sumCos^2), 有效值 = 幅值/sqrt2。
+   与基波不相关的成分(开关纹波、量化噪声)在积分中相互抵消。 */
+float Fundamental_RMS_Update(FUND_RMS *s, float sample, float theta, uint16_t f)
+{
+	uint16_t win;
+
+	if (f == 0U)
+	{
+		return s->lastRMS;   //防除零
+	}
+	win = (uint16_t)((ADC_SAMPLE_RATE + f / 2U) / f);
+
+	if (f != s->lastFreq)
+	{
+		s->lastFreq = f;
+		s->sumSin = 0.0f;
+		s->sumCos = 0.0f;
+		s->n = 0U;
+	}
+
+	s->sumSin += sample * arm_sin_f32(theta);
+	s->sumCos += sample * arm_cos_f32(theta);
+	s->n++;
+
+	if (s->n >= win)
+	{
+		const float inv = 2.0f / (float)s->n;
+		const float re = s->sumSin * inv;
+		const float im = s->sumCos * inv;
+		//0.70710678f = 1/sqrt2, 峰值转有效值
+		s->lastRMS = sqrtf(re * re + im * im) * 0.70710678f;
+		s->sumSin = 0.0f;
+		s->sumCos = 0.0f;
+		s->n = 0U;
+	}
+	return s->lastRMS;
 }
 
 float F=0;
