@@ -1,0 +1,47 @@
+# MDK-ARM
+MDK-ARM/*/Listings/
+MDK-ARM/*/Objects/
+MDK-ARM/*/DebugConfig/
+MDK-ARM/*/RTE/
+MDK-ARM/*/*.uvguix.*
+MDK-ARM/*/*.scvd
+MDK-ARM/*/*.crf
+MDK-ARM/*/*.d
+MDK-ARM/*/*.o
+MDK-ARM/*/*.axf
+MDK-ARM/*/*.hex
+MDK-ARM/*/*.htm
+MDK-ARM/*/*.lnp
+MDK-ARM/*/*.map
+MDK-ARM/*/JLink*
+MDK-ARM/*/*.iex
+MDK-ARM/*/*.bin
+
+# STM32CubeMX
+*.mxproject.bak
+
+# Build outputs
+*.o
+*.d
+*.crf
+*.lnp
+*.dep
+*.axf
+*.hex
+*.bin
+*.elf
+*.list
+*.map
+*.htm
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
