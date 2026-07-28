@@ -47,7 +47,7 @@ static void HRTIM_ApplyNeutralState(void)
     update_hrtim_duty(0.5f, 0.5f, 0.5f);
 
     /* Apply the preload and reset all counters, so the next start begins at
-       a known PWM valley instead of resuming from the former stop phase. */
+       a known period boundary instead of resuming from the former stop phase. */
     if (HAL_HRTIM_SoftwareUpdate(&hhrtim1, HRTIM_PWM_UPDATES) != HAL_OK)
     {
         Error_Handler();

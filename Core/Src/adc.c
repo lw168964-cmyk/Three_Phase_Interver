@@ -55,7 +55,8 @@ void MX_ADC1_Init(void)
   hadc1.Init.ContinuousConvMode = DISABLE;              // One scan is started by each HRTIM trigger.
   hadc1.Init.NbrOfConversion = 4;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
-  //HRTIM TRG1 is generated at the PWM valley once per 20 kHz carrier cycle.
+  //HRTIM TRG1 fires once per 20 kHz carrier, positioned so the four-channel
+  //scan straddles counter=0 (the ripple-average instant, see hrtim.h).
   //The DMA complete callback runs the controller after this full scan finishes.
   hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIG_HRTIM_TRG1;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;

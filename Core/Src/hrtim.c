@@ -130,11 +130,20 @@ void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
-  pCompareCfg.CompareValue = HRTIM_PWM_PERIOD_TICKS / 2U;
+  /* 上电中性态: pulse = PER/2 (50%占空), 居中 -> CMP1=PER/4, CMP2=3*PER/4 */
+  pCompareCfg.CompareValue = HRTIM_PWM_PERIOD_TICKS / 4U;
   if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, &pCompareCfg) != HAL_OK)
   {
     Error_Handler();
   }
+  pCompareCfg.CompareValue = (HRTIM_PWM_PERIOD_TICKS * 3U) / 4U;
+  if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_2, &pCompareCfg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* 死区已示波器实测约206ns/边, 与 280 tick @ tDTG=0.735ns 一致
+     (即本配置下 fDTG = 1.36GHz)。占一个20kHz周期的0.41%/边,
+     对应基波压降约0.4V, 由有效值慢环兜住, 无需额外死区补偿。 */
   pDeadTimeCfg.Prescaler = HRTIM_TIMDEADTIME_PRESCALERRATIO_DIV8;
   pDeadTimeCfg.RisingValue = 280;
   pDeadTimeCfg.RisingSign = HRTIM_TIMDEADTIME_RISINGSIGN_POSITIVE;
@@ -157,10 +166,13 @@ void MX_HRTIM1_Init(void)
     Error_Handler();
   }
   pOutputCfg.Polarity = HRTIM_OUTPUTPOLARITY_HIGH;
-  /* Master PER is the common carrier-zero boundary. Each leg goes active at
-     that boundary and inactive at its own CMP1, so CMP1/PER is its duty. */
-  pOutputCfg.SetSource = HRTIM_OUTPUTSET_MASTERPER;
-  pOutputCfg.ResetSource = HRTIM_OUTPUTRESET_TIMCMP1;
+  /* 居中脉冲: 每相在自己的 CMP1 置位、CMP2 复位, 二者关于 PER/2 对称
+     (CMP1 = (PER-pulse)/2, CMP2 = (PER+pulse)/2, 见 update_hrtim_duty)。
+     000 零矢量因此落在周期两端、111 落在中间, 波形对 counter=0 严格对称,
+     使 counter=0 处的采样值等于电感电流的周期平均值(推导见 hrtim.h)。
+     注意不能再用 MASTERPER 置位: 那会把上升沿钉在周期边界, 即左对齐。 */
+  pOutputCfg.SetSource = HRTIM_OUTPUTSET_TIMCMP1;
+  pOutputCfg.ResetSource = HRTIM_OUTPUTRESET_TIMCMP2;
   pOutputCfg.IdleMode = HRTIM_OUTPUTIDLEMODE_NONE;
   pOutputCfg.IdleLevel = HRTIM_OUTPUTIDLELEVEL_INACTIVE;
   pOutputCfg.FaultLevel = HRTIM_OUTPUTFAULTLEVEL_NONE;
@@ -200,7 +212,13 @@ void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
+  pCompareCfg.CompareValue = HRTIM_PWM_PERIOD_TICKS / 4U;
   if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, &pCompareCfg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  pCompareCfg.CompareValue = (HRTIM_PWM_PERIOD_TICKS * 3U) / 4U;
+  if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_2, &pCompareCfg) != HAL_OK)
   {
     Error_Handler();
   }
@@ -212,14 +230,20 @@ void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
+  pCompareCfg.CompareValue = HRTIM_PWM_PERIOD_TICKS / 4U;
   if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_C, HRTIM_COMPAREUNIT_1, &pCompareCfg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  pCompareCfg.CompareValue = (HRTIM_PWM_PERIOD_TICKS * 3U) / 4U;
+  if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_C, HRTIM_COMPAREUNIT_2, &pCompareCfg) != HAL_OK)
   {
     Error_Handler();
   }
   /* USER CODE BEGIN HRTIM1_Init 2 */
   //===== ADC采样与载波对齐 =====
-  /* ADC trigger point: keep the 20 kHz trigger synchronous, but move it away
-     from the MASTERPER edge where all three bridge legs commutate. */
+  /* 触发点取 PER-800, 使四通道扫描(1600 tick)居中于对称点 counter=0。
+     居中脉冲下该点是电感电流纹波的平均点(推导见 hrtim.h)。 */
   pCompareCfg.CompareValue = HRTIM_ADC_SAMPLE_DELAY_TICKS;
   if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_MASTER,
                                        HRTIM_COMPAREUNIT_1, &pCompareCfg) != HAL_OK)
@@ -227,8 +251,6 @@ void MX_HRTIM1_Init(void)
     Error_Handler();
   }
 
-  //Master CMP1 is 3.60 us after the A/B/C valley. This preserves one sample
-  //per carrier while avoiding the common switching edge at counter = 0.
   //One HRTIM trigger starts one four-channel ADC scan per complete PWM cycle.
   HRTIM_ADCTriggerCfgTypeDef pADCTriggerCfg = {0};
   pADCTriggerCfg.UpdateSource = HRTIM_ADCTRIGGERUPDATE_MASTER;

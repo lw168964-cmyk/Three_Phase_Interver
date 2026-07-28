@@ -16,9 +16,9 @@
 #endif
 
 #define CONTROL_SOFTSTART_SECONDS  0.20f
-/* Keep margin for the carrier-synchronous ADC scan in the initial
- * zero-vector interval. Raising this limit requires a verified new ADC
- * sampling schedule, especially under no-load conditions. */
+/* 改居中脉冲后, 采样正确性不再依赖零矢量窗口宽度(见hrtim.h), 该限幅回归其
+ * 本来的作用: 只做过调制保护。六边形内接圆对应 m=1.0, 留15%余量给瞬态。
+ * m=0.85 对应线电压有效值上限 0.85*48/sqrt2 = 28.8V, 24V目标有充足余量。 */
 #define CONTROL_MODULATION_LIMIT   0.85f
 
 float Udc = 48.0f;//直流母线电压
@@ -32,6 +32,21 @@ float D=0;
 uint16_t cnt=0;
 static float reference_ramp = 0.0f;
 static volatile uint8_t control_enabled = 0U;
+
+/* ===== 有效值慢环 =====
+   作用: PR只保证"瞬时波形跟踪参考", 但参考幅值到实际线电压有效值之间还串着
+   死区压降、桥臂导通损耗、采样标定误差等一堆不进模型的因素。慢环直接以
+   Uab_rms 为反馈, 乘性修正幅值指令, 使有效值必定收敛到 Line_U1_Set。
+   为什么用乘性而非加性: 修正量应随幅值等比缩放, 换频率/换给定时无需重调增益。
+   带宽必须远低于LC谐振(1027Hz)和PR谐振(基波), 否则会与它们互相作用:
+   每基波周期更新一次, Ki=0.02 -> 时间常数约50个基波周期(50Hz时1.0s),
+   与1027Hz差4个数量级, 完全解耦, 不影响前面算的相位裕度。 */
+#define RMS_LOOP_KI        0.02f
+#define RMS_TRIM_MIN       0.80f
+#define RMS_TRIM_MAX       1.30f
+float rms_trim = 1.0f;                 //幅值乘性修正(watch窗口可观察收敛过程)
+static float prev_theta = 0.0f;        //用于检测基波周期翻转
+static uint8_t modulation_saturated = 0U;  //本基波周期内调制是否饱和(抗积分饱和)
 
 /* ===== 控制环时序实测 =====
    用DWT周期计数器直接量,不靠估算。全部volatile,调试器watch窗口可直接读。
@@ -138,6 +153,12 @@ void Control_Reset(void)
 	Ia_rms_raw = 0.0f;
 	memset(&fund_Ia, 0, sizeof(fund_Ia));
 
+	//慢环状态随每次启动复位,否则上次运行(可能是别的给定/负载)的修正量会
+	//在本次启动瞬间直接作用到幅值上,形成一次阶跃
+	rms_trim = 1.0f;
+	prev_theta = 0.0f;
+	modulation_saturated = 0U;
+
 	Reset_PR_State(&PR_Volt_PhaseA);
 	Reset_PR_State(&PR_Volt_PhaseC);
 	Reset_PI_State(&P_Crt_PhaseA);
@@ -157,8 +178,9 @@ void Control_Disable(void)
 	control_enabled = 0U;
 }
 
-//控制环路入口:Master PERIOD与三相载波谷值重合，ADC完成四路转换后进入本回调。
-//CMP preload在下一个谷值统一装载，控制始终具有一个完整PWM周期的确定延时。
+//控制环路入口:四路ADC扫描居中于对称点counter=0,居中脉冲下该点即电感电流纹波的
+//周期平均点(推导见hrtim.h),扫描结束后进入本回调。
+//CMP preload在下一个counter=0统一装载,控制始终具有一个完整PWM周期的确定延时。
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
 	 if((hadc == &hadc1) && (control_enabled != 0U))
@@ -210,6 +232,11 @@ void Volt_Loop_Control(float des_d,float des_q,float sita,uint16_t f) //单电�
 		}
 	}
 	des_d *= reference_ramp;
+	//慢环修正: 软启动完成前不施加(此时有效值窗口还没稳定,反馈无意义)
+	if (reference_ramp >= 1.0f)
+	{
+		des_d *= rms_trim;
+	}
 
 	//1.采样线电压AB，BC，线电流A，B
 	Cal_ACVolt_AB(&input_volt1);//AB线电压瞬时值采样
@@ -287,7 +314,33 @@ void Volt_Loop_Control(float des_d,float des_q,float sita,uint16_t f) //单电�
 		clark.beta *= scale;
 	}
 	my_svpwm_calc(&SVPWM,clark.alpha,clark.beta);//调制同时改变占空比
-	
+
+	//10.有效值慢环:每个基波周期更新一次
+	//每周期只更新一次的理由: Uab_rms本身就是整周期RMS, 一个周期内它是常量,
+	//在周期中间反复用同一个值去积分等于把增益放大了(采样率/f)倍, 会失稳。
+	if (modulation_sq > modulation_limit_sq)
+	{
+		//调制已饱和, 再往上修正没有物理意义, 记录下来供本周期末抗饱和用
+		modulation_saturated = 1U;
+	}
+
+	//检测基波周期翻转(theta被fixed_angle_update归一化时会回绕)
+	if (sita < prev_theta)
+	{
+		if ((reference_ramp >= 1.0f) && (Line_U1_Set > 0.1f))
+		{
+			//归一化误差:用相对量,使增益与给定值无关
+			const float err = (Line_U1_Set - Uab_rms) / Line_U1_Set;
+			//抗积分饱和:调制已到上限时禁止继续往上积分(向下修正仍允许)
+			if ((modulation_saturated == 0U) || (err < 0.0f))
+			{
+				rms_trim += RMS_LOOP_KI * err;
+				rms_trim = my_clip(rms_trim, RMS_TRIM_MIN, RMS_TRIM_MAX);
+			}
+		}
+		modulation_saturated = 0U;
+	}
+	prev_theta = sita;
 }
 
 

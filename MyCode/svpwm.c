@@ -167,20 +167,27 @@ void my_svpwm_calc(SVPWM_STRUCT *p, float alpha, float beta)
 
     update_hrtim_duty(p->vta, p->vtb, p->vtc);
 }
+/* 把占空比写成关于 PER/2 对称的居中脉冲。
+   CMP1 = (PER - pulse)/2 置位, CMP2 = (PER + pulse)/2 复位。
+   duty 的语义不变(仍是高电平占整周期的比例), 故上层 SVPWM 无需改动。
+   限幅后 pulse in [0.02,0.98]*34000 -> CMP1 in [340,16660], CMP2 in [17340,33660],
+   均满足 RM0440 对比较值 >=3 且 <PER 的要求。 */
+static void set_centered_pulse(uint32_t timer_index, float duty)
+{
+	const uint32_t period = HRTIM_PWM_PERIOD_TICKS;
+	const uint32_t pulse = (uint32_t)(period * duty_clip(duty));
+	const uint32_t half_edge = (period - pulse) / 2U;
+
+	hhrtim1.Instance->sTimerxRegs[timer_index].CMP1xR = half_edge;
+	hhrtim1.Instance->sTimerxRegs[timer_index].CMP2xR = half_edge + pulse;
+}
+
 //更新占空比
 void update_hrtim_duty(float dutyA, float dutyB, float dutyC)
 {
-
-  const uint32_t period = HRTIM_PWM_PERIOD_TICKS;
-
-	//防御性限幅:占空比为负时float转uint32会回绕成极大值,导致占空比跳到满量程
-	dutyA = duty_clip(dutyA);
-	dutyB = duty_clip(dutyB);
-	dutyC = duty_clip(dutyC);
-
-	hhrtim1.Instance->sTimerxRegs[0].CMP1xR =(uint32_t)(period * dutyA);
-	hhrtim1.Instance->sTimerxRegs[1].CMP1xR =(uint32_t)(period * dutyB);
-	hhrtim1.Instance->sTimerxRegs[2].CMP1xR =(uint32_t)(period * dutyC);
-
-
+	//防御性限幅在 set_centered_pulse 内统一做:
+	//占空比为负时float转uint32会回绕成极大值,导致占空比跳到满量程
+	set_centered_pulse(0U, dutyA);
+	set_centered_pulse(1U, dutyB);
+	set_centered_pulse(2U, dutyC);
 }

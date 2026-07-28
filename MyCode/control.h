@@ -9,6 +9,7 @@ extern float Ia_rms;//A相线电流基波有效值(OLED显示用)
 extern float Ia_rms_raw;//A相线电流原始RMS(含开关纹波,排查用)
 
 extern float Uab_rms;//AB线电压有效值
+extern float rms_trim;//有效值慢环的幅值乘性修正(1.0=无修正),调试器watch可看收敛
 
 /* 控制环时序实测量(DWT cycle, 170MHz)。一个20kHz周期=8500 cycle。
    ctrl_cycles_max<8500 表示中断跑得完; ctrl_missed_trig>0 才是频率不稳的时序性证据。 */
