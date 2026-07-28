@@ -78,7 +78,7 @@ static void HRTIM_ForcePrimaryOutputsInactive(void)
 
    与fixed_angle_init()的两点区别:
    1. 保留theta。fixed_angle_init会把theta清零,运行中改频率就是一次相位跳变,
-      对2mH/2uF这种ζ极小的LC是一记阶跃冲击。改频率只该改角速度,不该动当前相位。
+      对2mH/9.9uF这种ζ极小的LC是一记阶跃冲击。改频率只该改角速度,不该动当前相位。
    2. 整组更新期间屏蔽中断。ISR每周期读theta/w/Fo,非原子更新会让某一拍用到
       新w配旧Fo(RMS窗口)的混搭状态。 */
 void OLEDUI_Apply_Freq(void)

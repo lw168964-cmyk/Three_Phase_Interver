@@ -38,9 +38,9 @@ static volatile uint8_t control_enabled = 0U;
    死区压降、桥臂导通损耗、采样标定误差等一堆不进模型的因素。慢环直接以
    Uab_rms 为反馈, 乘性修正幅值指令, 使有效值必定收敛到 Line_U1_Set。
    为什么用乘性而非加性: 修正量应随幅值等比缩放, 换频率/换给定时无需重调增益。
-   带宽必须远低于LC谐振(1027Hz)和PR谐振(基波), 否则会与它们互相作用:
+   带宽必须远低于LC谐振(1131Hz)和PR谐振(基波), 否则会与它们互相作用:
    每基波周期更新一次, Ki=0.02 -> 时间常数约50个基波周期(50Hz时1.0s),
-   与1027Hz差4个数量级, 完全解耦, 不影响前面算的相位裕度。 */
+   与1131Hz差4个数量级, 完全解耦, 不影响前面算的相位裕度。 */
 #define RMS_LOOP_KI        0.02f
 #define RMS_TRIM_MIN       0.80f
 #define RMS_TRIM_MAX       1.30f
@@ -268,7 +268,8 @@ void Volt_Loop_Control(float des_d,float des_q,float sita,uint16_t f) //单电�
 	//参考值不含谐振状态,通路直接断开。
 	//注:切断这条正反馈是必要条件但不是充分条件——环路总增益还必须落在稳定范围内。
 	//无量纲环路增益 = PR的Kr[A/V] * 内环Kp[ohm], 原 30*8=240 空载必发散,
-	//现取 1.0*1.0=1.0。详见inital.c的量纲说明。
+	//现取 10*2.2=22(基波处)。空载稳定不由这个数决定, 而由PR在LC谐振点的
+	//高频残留增益决定(|PR(jw_LC)|*Z0 < 1), 详见inital.c的量纲与判据说明。
 	P_Crt_PhaseA.fpU += Phase_A_ref;
 
 	//5.C相环路控制
@@ -298,7 +299,7 @@ void Volt_Loop_Control(float des_d,float des_q,float sita,uint16_t f) //单电�
 	//8.参数计算显示
 	Uab_rms = Calculate_ACVoltage_RMS_AB(&input_volt1,f);//计算AB线电压有效值
 	//电流显示必须用基波提取, 不能用原始RMS:
-	//采样的是电感电流, 空载纹波峰峰约0.25A > 基波峰值0.074A,
+	//采样的是电感电流, 空载纹波峰峰约0.25A >> 基波峰值0.061A(C=9.9uF),
 	//原始RMS把纹波也算进去 -> 空载会显示成几百mA以上, 那不是负载电流。
 	Ia_rms = Fundamental_RMS_Update(&fund_Ia, input_volt1.fpPha1CrtFB, sita, f);
 	//原始RMS保留为排查用(调试器watch), 与Ia_rms的差值即纹波+噪声含量
