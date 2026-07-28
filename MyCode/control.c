@@ -113,6 +113,34 @@ static void Reset_PI_State(ST_PID *controller)
 //实测系数下|PR(z)|: 50Hz=30.2, 40Hz=6.55, 30Hz=2.83, 80Hz=3.09, 100Hz=2.02
 //->偏离50Hz就退化成Kp=0.2的纯比例,30Hz轻载幅值误差-14.0%。
 //(注:这条不影响输出频率稳定性,PR极点|z|=0.999215衰减时间常数63.7ms,稳态已衰完)
+/* 谐波谐振器的频率上限。
+   LC谐振在1131Hz, 谐振器的峰不能靠得太近: 那里对象相位已接近-180度,
+   在峰上叠一个±90度相位跳变的环节会直接吃掉相位裕度。
+   取800Hz(约0.71*f_LC): 5次全程可用(100Hz基波时5次=500Hz),
+   7次在基波>114Hz时才关掉, 而面板上限是100Hz(7次=700Hz), 故实际全程可用。
+   超限时把Kr置0再PR_Init: Kp本就是0, 于是n0/n1/n2全为0, 该谐振器输出恒为0。 */
+#define HARMONIC_MAX_HZ   800.0f
+#define HARMONIC_KR       2.4f
+
+//按基波频率重算一个谐波谐振器。超出安全频率则令其失效并清状态。
+static void Harmonic_Retune(ST_PR *pr, float hz, uint8_t order)
+{
+	const float fh = hz * (float)order;
+
+	pr->omiga_0 = 2.0f * 3.1415926f * fh;
+	if (fh > HARMONIC_MAX_HZ)
+	{
+		pr->Kr = 0.0f;
+		//残留状态若不清, 失效瞬间递推项还会衰减着往外吐一段输出
+		Reset_PR_State(pr);
+	}
+	else
+	{
+		pr->Kr = HARMONIC_KR;
+	}
+	PR_Init(pr);
+}
+
 void Control_SetFundamentalFreq(float hz)
 {
 	const float w0 = 2.0f * 3.1415926f * hz;
@@ -120,11 +148,17 @@ void Control_SetFundamentalFreq(float hz)
 
 	//系数是5个变量的一组,ISR读到"新旧混搭"会瞬时改变差分方程的极点,
 	//在ζ极小的环里足以踢出一次振荡。整组更新期间屏蔽中断,耗时约1us。
+	//谐波谐振器同理, 且必须与基波在同一临界区内完成, 否则会出现
+	//基波已按新频率、谐波仍按旧频率的中间态。
 	__disable_irq();
 	PR_Volt_PhaseA.omiga_0 = w0;
 	PR_Volt_PhaseC.omiga_0 = w0;
 	PR_Init(&PR_Volt_PhaseA);
 	PR_Init(&PR_Volt_PhaseC);
+	Harmonic_Retune(&PR_H5_PhaseA, hz, 5U);
+	Harmonic_Retune(&PR_H7_PhaseA, hz, 7U);
+	Harmonic_Retune(&PR_H5_PhaseC, hz, 5U);
+	Harmonic_Retune(&PR_H7_PhaseC, hz, 7U);
 	if (primask == 0U)
 	{
 		__enable_irq();
@@ -161,6 +195,12 @@ void Control_Reset(void)
 
 	Reset_PR_State(&PR_Volt_PhaseA);
 	Reset_PR_State(&PR_Volt_PhaseC);
+	//谐波谐振器状态同样要清:时间常数0.5s,上次运行(可能是别的负载/给定)
+	//积累的谐波修正量会在本次启动后持续半秒作用到输出上
+	Reset_PR_State(&PR_H5_PhaseA);
+	Reset_PR_State(&PR_H7_PhaseA);
+	Reset_PR_State(&PR_H5_PhaseC);
+	Reset_PR_State(&PR_H7_PhaseC);
 	Reset_PI_State(&P_Crt_PhaseA);
 	Reset_PI_State(&P_Crt_PhaseC);
 	memset(&input_volt1, 0, sizeof(input_volt1));
@@ -259,7 +299,16 @@ void Volt_Loop_Control(float des_d,float des_q,float sita,uint16_t f) //单电�
 	PR_Volt_PhaseA.fpDes = Phase_A_ref;
 	PR_Volt_PhaseA.fpFB = input_volt1.fpPhaAVoltFB;
 	PR_Controller(&PR_Volt_PhaseA);
-	P_Crt_PhaseA.fpDes = PR_Volt_PhaseA.fpU;
+	//5/7次谐振器吃同一个电压误差(参考只含基波,故误差里天然带着谐波),
+	//各自只对自己那一根谱线有增益,输出并入同一个电流指令节点,
+	//这样谐波修正量同样经过内环的有源阻尼。
+	PR_H5_PhaseA.fpDes = Phase_A_ref;
+	PR_H5_PhaseA.fpFB = input_volt1.fpPhaAVoltFB;
+	PR_Controller(&PR_H5_PhaseA);
+	PR_H7_PhaseA.fpDes = Phase_A_ref;
+	PR_H7_PhaseA.fpFB = input_volt1.fpPhaAVoltFB;
+	PR_Controller(&PR_H7_PhaseA);
+	P_Crt_PhaseA.fpDes = PR_Volt_PhaseA.fpU + PR_H5_PhaseA.fpU + PR_H7_PhaseA.fpU;
 	P_Crt_PhaseA.fpFB = input_volt1.fpPha1CrtFilt;//用滤波后电流,内环Kp可开大而不放大谐波
 	PI_Controller(&P_Crt_PhaseA);
 	//A相电压前馈:必须用参考值,不能用实测反馈值。
@@ -276,7 +325,13 @@ void Volt_Loop_Control(float des_d,float des_q,float sita,uint16_t f) //单电�
 	PR_Volt_PhaseC.fpDes = Phase_C_ref;
 	PR_Volt_PhaseC.fpFB = input_volt1.fpPhaCVoltFB;
 	PR_Controller(&PR_Volt_PhaseC);
-	P_Crt_PhaseC.fpDes = PR_Volt_PhaseC.fpU;
+	PR_H5_PhaseC.fpDes = Phase_C_ref;   //同A相
+	PR_H5_PhaseC.fpFB = input_volt1.fpPhaCVoltFB;
+	PR_Controller(&PR_H5_PhaseC);
+	PR_H7_PhaseC.fpDes = Phase_C_ref;
+	PR_H7_PhaseC.fpFB = input_volt1.fpPhaCVoltFB;
+	PR_Controller(&PR_H7_PhaseC);
+	P_Crt_PhaseC.fpDes = PR_Volt_PhaseC.fpU + PR_H5_PhaseC.fpU + PR_H7_PhaseC.fpU;
 	P_Crt_PhaseC.fpFB = input_volt1.fpPha3CrtFilt;//用滤波后电流,内环Kp可开大而不放大谐波
 	PI_Controller(&P_Crt_PhaseC);
 	P_Crt_PhaseC.fpU += Phase_C_ref; //C相电压前馈(参考式,同A相)

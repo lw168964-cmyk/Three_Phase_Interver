@@ -20,5 +20,11 @@ extern ST_PR PR_Volt_PhaseC; //C相电压PR控制器
 extern ST_PID P_Crt_PhaseA; //A相电流P控制器
 extern ST_PID P_Crt_PhaseC; //C相电流P控制器
 
+//5/7次谐波谐振器(降THD)。系数随基波频率由Control_SetFundamentalFreq重算
+extern ST_PR PR_H5_PhaseA;
+extern ST_PR PR_H7_PhaseA;
+extern ST_PR PR_H5_PhaseC;
+extern ST_PR PR_H7_PhaseC;
+
 	
 #endif 

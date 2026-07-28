@@ -89,4 +89,35 @@ ST_PID P_Crt_PhaseC={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
 					.fpKp=2.2f,.fpKi=0,  // 同A相
 					.fpDt=CTRL_DT};
 
+/* ===== 谐波谐振器(降THD) =====
+ * 为什么需要: 基波PR的 omiga_c=6 使谐振峰只有约1Hz宽, 基波处增益约10,
+ * 但5次(250Hz)处 |PR| = Kp + 2*Kr*omiga_c/w = 0.01+0.076 = 0.086 —— 谐波
+ * 几乎得不到任何抑制, 死区畸变/传感器非线性/母线纹波全部直通到输出。
+ * 窄峰是为空载稳定故意选的(见上方判据), THD就是它的代价。
+ *
+ * 为什么只做5、7次: 三相三线无中线, 3的倍数次为共模, 在
+ * Calculate_PhaseVoltage 的线电压重构中自然消去, 加谐振器无意义。
+ *
+ * 参数选择:
+ *   Kp=0 —— 纯谐振, 不引入任何宽带增益, 因此不动LC区的穿越行为。
+ *   omiga_c=2.0 (比基波的6更窄) —— 谐振器在LC谐振点的残留增益
+ *     |R(jw_LC)| ≈ 2*Kr*omiga_c/w_LC = 2*2.4*2/7106 = 0.00135,
+ *     乘 Z0=14.21 得每个谐振器对 |L(w_LC)| 贡献仅 0.019。
+ *     窄峰可行的前提: 谐波频率由开环角度发生器精确给出(无PLL误差),
+ *     且 Control_SetFundamentalFreq 会随基波频率重算系数。
+ *   Kr=2.4 —— 在上述 omiga_c 下, 两个谐振器合计把 |L(w_LC)| 从 0.38
+ *     推到 0.42, 增益裕度 8.4dB -> 8.0dB, 这是刻意留出的预算上限。
+ *     再往上加Kr就要吃掉当初修好空载振荡的那部分裕度。
+ *   fpUMax=5 —— 谐波修正量本应远小于基波电流, 5A纯粹是防积分饱和的兜底。
+ * 代价: 峰窄 -> 时间常数 1/omiga_c = 0.5s, 谐波修正要约半秒才建立,
+ *       只改善稳态THD, 对瞬态无效。 */
+ST_PR PR_H5_PhaseA={.fpUMax=5,.omiga_c=2.0f,.omiga_0=2*3.1415926f*250,
+					.Kp=0.0f,.Kr=2.4f,.fpDt=CTRL_DT};
+ST_PR PR_H7_PhaseA={.fpUMax=5,.omiga_c=2.0f,.omiga_0=2*3.1415926f*350,
+					.Kp=0.0f,.Kr=2.4f,.fpDt=CTRL_DT};
+ST_PR PR_H5_PhaseC={.fpUMax=5,.omiga_c=2.0f,.omiga_0=2*3.1415926f*250,
+					.Kp=0.0f,.Kr=2.4f,.fpDt=CTRL_DT};
+ST_PR PR_H7_PhaseC={.fpUMax=5,.omiga_c=2.0f,.omiga_0=2*3.1415926f*350,
+					.Kp=0.0f,.Kr=2.4f,.fpDt=CTRL_DT};
+
 
