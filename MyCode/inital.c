@@ -48,7 +48,7 @@ ST_PR PR_Volt_PhaseA={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
 						  //即约10dB增益裕度, LC区不再穿越, 穿越只发生在基波附近(相位良好)。
 						  //Kr保持8: PR在基波处增益=Kp+Kr, 与高频增益解耦,
 						  //所以降Kp不牺牲基波跟踪能力。
-						  .Kp=0.01f,.Kr=8.0f,
+						  .Kp=0.01f,.Kr=10.0f,
 						  .fpDt=CTRL_DT};
 //A相电流P控制器（内环有源阻尼，输出为电压指令V）
 //滤波参数: L=2mH, C=12uF(星接) -> f0=1027Hz, 特征阻抗Z0=sqrt(L/C)=12.91欧
@@ -75,7 +75,7 @@ ST_PR PR_Volt_PhaseC={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
 						  .pre_fpU=0,.pre_pre_fpU= 0,
 						  .fpUMax=40,.fpEMin= 0,
 						  .omiga_c=6.0f,.omiga_0=2*3.1415926f*50,
-						  .Kp=0.01f,.Kr=8.0f,  // 同A相
+						  .Kp=0.01f,.Kr=10.0f,  // 同A相
 						  .fpDt=CTRL_DT};
 //C相电流P控制器（内环有源阻尼，输出为电压指令V）
 ST_PID P_Crt_PhaseC={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
