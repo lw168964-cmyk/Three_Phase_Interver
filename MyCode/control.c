@@ -120,7 +120,11 @@ static void Reset_PI_State(ST_PID *controller)
    7次在基波>114Hz时才关掉, 而面板上限是100Hz(7次=700Hz), 故实际全程可用。
    超限时把Kr置0再PR_Init: Kp本就是0, 于是n0/n1/n2全为0, 该谐振器输出恒为0。 */
 #define HARMONIC_MAX_HZ   800.0f
-#define HARMONIC_KR       2.4f
+/* Kr=4.8: 由差分方程精确算出的裕度定标(host端复算PR_Init所得, 非解析近似)。
+   |L(w_LC)| 基波单独 0.2774(11.14dB) -> 加两个谐振器 0.3592(8.89dB)。
+   实测各Kr对应: 2.4->9.94dB, 4.8->8.89dB, 6.0->8.41dB, 7.2->7.96dB(破8dB底线)。
+   取4.8而非6.0: 留一档给上机后可能需要的微调, 且谐波抑制已达 |H5|=4.45。 */
+#define HARMONIC_KR       4.8f
 
 //按基波频率重算一个谐波谐振器。超出安全频率则令其失效并清状态。
 static void Harmonic_Retune(ST_PR *pr, float hz, uint8_t order)

@@ -100,24 +100,25 @@ ST_PID P_Crt_PhaseC={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
  *
  * 参数选择:
  *   Kp=0 —— 纯谐振, 不引入任何宽带增益, 因此不动LC区的穿越行为。
- *   omiga_c=2.0 (比基波的6更窄) —— 谐振器在LC谐振点的残留增益
- *     |R(jw_LC)| ≈ 2*Kr*omiga_c/w_LC = 2*2.4*2/7106 = 0.00135,
- *     乘 Z0=14.21 得每个谐振器对 |L(w_LC)| 贡献仅 0.019。
+ *   omiga_c=2.0 (比基波的6更窄) —— 谐振器在LC谐振点的残留增益极小,
+ *     每个谐振器对 |L(w_LC)| 的贡献仅约 0.04 (Kr=4.8, host端精确复算)。
  *     窄峰可行的前提: 谐波频率由开环角度发生器精确给出(无PLL误差),
  *     且 Control_SetFundamentalFreq 会随基波频率重算系数。
- *   Kr=2.4 —— 在上述 omiga_c 下, 两个谐振器合计把 |L(w_LC)| 从 0.38
- *     推到 0.42, 增益裕度 8.4dB -> 8.0dB, 这是刻意留出的预算上限。
- *     再往上加Kr就要吃掉当初修好空载振荡的那部分裕度。
+ *   Kr=4.8 —— 见control.c的HARMONIC_KR。两个谐振器合计把 |L(w_LC)|
+ *     从 0.2774(11.14dB) 推到 0.3592(8.89dB)。8dB是自设底线, Kr=7.2 会破线。
+ *     谐振峰: |H5|@250Hz=4.45, |H7|@350Hz=3.21。
  *   fpUMax=5 —— 谐波修正量本应远小于基波电流, 5A纯粹是防积分饱和的兜底。
  * 代价: 峰窄 -> 时间常数 1/omiga_c = 0.5s, 谐波修正要约半秒才建立,
  *       只改善稳态THD, 对瞬态无效。 */
+//注: Kr/omiga_0 会被 Harmonic_Retune 按 Line_f1 覆写(main->OLEDUI_Apply_Freq
+//->Control_SetFundamentalFreq), 这里的值只是上电初值, 与 HARMONIC_KR 保持一致以免误导
 ST_PR PR_H5_PhaseA={.fpUMax=5,.omiga_c=2.0f,.omiga_0=2*3.1415926f*250,
-					.Kp=0.0f,.Kr=2.4f,.fpDt=CTRL_DT};
+					.Kp=0.0f,.Kr=4.8f,.fpDt=CTRL_DT};
 ST_PR PR_H7_PhaseA={.fpUMax=5,.omiga_c=2.0f,.omiga_0=2*3.1415926f*350,
-					.Kp=0.0f,.Kr=2.4f,.fpDt=CTRL_DT};
+					.Kp=0.0f,.Kr=4.8f,.fpDt=CTRL_DT};
 ST_PR PR_H5_PhaseC={.fpUMax=5,.omiga_c=2.0f,.omiga_0=2*3.1415926f*250,
-					.Kp=0.0f,.Kr=2.4f,.fpDt=CTRL_DT};
+					.Kp=0.0f,.Kr=4.8f,.fpDt=CTRL_DT};
 ST_PR PR_H7_PhaseC={.fpUMax=5,.omiga_c=2.0f,.omiga_0=2*3.1415926f*350,
-					.Kp=0.0f,.Kr=2.4f,.fpDt=CTRL_DT};
+					.Kp=0.0f,.Kr=4.8f,.fpDt=CTRL_DT};
 
 
