@@ -29,7 +29,7 @@ ST_PR PR_Volt_PhaseA={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
 						  //!! 量纲: PR输出是内环的电流指令(A), 故Kp/Kr量纲为 A/V;
 						  //   内环Kp_i量纲为欧姆; 无量纲环路增益 = Kr[A/V] * Kp_i[ohm]。
 						  //   原 Kr=30 配 Kp_i=8 -> 环路增益240, 空载必发散。
-						  //空载物理需求: 19.6V相电压只需电容电流2*pi*50*9.9u*19.6=0.061A,
+						  //空载物理需求: 26.1V相电压只需电容电流2*pi*50*9.9u*26.1=0.081A,
 						  //PR稳态输出应在0.1A量级; Kr=30 意味着1V误差索求30A, 量级错了。
 						  //环路增益不能太小: Kr*Kp_i=1 时PR几乎没有修正能力, 输出退化成
 						  //纯前馈开环, 死区/母线纹波/传感器误差全部直通到输出 -> 波形变乱。
@@ -71,7 +71,10 @@ ST_PR PR_Volt_PhaseA={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
 //空载稳定由PR的高频增益负责(那才是穿越点所在), 二者分工不同, 不能互相替代。
 ST_PID P_Crt_PhaseA={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
 					.fpE=0, .fpPreE=0,.fpSumE= 0,.fpU= 0,
-					.fpUMax=30,.fpEpMax=30,.fpEMin= 0,  // 电压指令限幅30V
+					//30V限的是"阻尼项"不是总输出: 限幅作用在PI_Controller内部,
+					//而前馈 Phase_A_ref 是在control.c里限幅之后才相加的。
+					//故总电压指令可达 30+26.1=56.1V, 由第7步的调制限幅兜住。
+					.fpUMax=30,.fpEpMax=30,.fpEMin= 0,  // 阻尼项限幅30V(非总指令)
 					.fpKp=2.2f,.fpKi=0,   // C=9.9uF -> Z0=14.21, 保持 zeta=0.0774
 					.fpDt=CTRL_DT};
 //C相电压PR控制器
@@ -85,7 +88,7 @@ ST_PR PR_Volt_PhaseC={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
 //C相电流P控制器（内环有源阻尼，输出为电压指令V）
 ST_PID P_Crt_PhaseC={.fpDes=0,.fpFB= 0,						 /*Des, FB*/
 					.fpE=0, .fpPreE=0,.fpSumE= 0,.fpU= 0,
-					.fpUMax=30,.fpEpMax=30,.fpEMin= 0,  // 电压指令限幅30V
+					.fpUMax=30,.fpEpMax=30,.fpEMin= 0,  // 阻尼项限幅30V(非总指令,同A相)
 					.fpKp=2.2f,.fpKi=0,  // 同A相
 					.fpDt=CTRL_DT};
 

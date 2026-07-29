@@ -160,10 +160,16 @@ float Calculate_ACVoltage_RMS_BC(ST_ELEC_OBS *pstM,uint16_t f)
     return RMS_Update(&rmsCalc2,pstM->fpBCVolt,f);
 }
 
-//AB线电压
+/* AB线电压
+   增益30与偏置1.644V由采样模块硬件决定, 不可改动(两路必须严格一致, 见Cal_ACVolt_BC)。
+   由此得到的可测范围约 ±49.3V, 是输出电压的硬上限:
+     24V线电压: 峰值33.9V, ADC摆幅 0.51~2.78V, 占量程 69%
+     32V线电压: 峰值45.3V, ADC摆幅 0.14~3.15V, 占量程 92% (距下轨仅136mV)
+   32V已接近量程边界。反馈一旦削顶, 在 zeta=0.077 的环里等于给外环喂了个
+   非线性环节。既然增益不能改, 这条就是输出电压不宜再往上提的原因。 */
 void Cal_ACVolt_AB(ST_ELEC_OBS *pstM)
 {
-	float raw = (float)((ADC1_Value[0])*3.3f/4096.f-1.644f)*30.f;
+	float raw = (float)((ADC1_Value[0])*3.3f/4096.0f-1.644f)*34.977f;
 	//1.慢速跟踪并扣除零点:零点误差经前馈会变成输出直流分量(实测Ua有-1.96%直流)
 	pstM->fpABVoltDC += DC_TRACK_K * (raw - pstM->fpABVoltDC);
 	raw -= pstM->fpABVoltDC;
@@ -180,7 +186,7 @@ void Cal_ACVolt_BC(ST_ELEC_OBS *pstM)
 	   去调节, 会主动把输出调成三相不对称, 而THD指标看不出来。
 	   零点偏差(1.644 vs 1.656)由DC_TRACK慢跟踪消除, 无需强求一致。
 	   若两路实际分压比确有差异, 应在硬件上配对电阻, 而不是在这里补偿。 */
-	float raw = (float)((ADC1_Value[2])*3.3f/4096.f-1.656f)*30.f;
+	float raw = (float)((ADC1_Value[2])*3.3f/4096.f-1.656f)*35.0f;
 	pstM->fpBCVoltDC += DC_TRACK_K * (raw - pstM->fpBCVoltDC);
 	raw -= pstM->fpBCVoltDC;
 	pstM->fpBCVolt += VOLT_FILT_K * (raw - pstM->fpBCVolt);

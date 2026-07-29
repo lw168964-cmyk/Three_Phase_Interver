@@ -17,10 +17,13 @@
 UI_State g_current_ui = UI_START;                   // 默认初始界面为"开始界面"
 
 // 参数（I1=0.00A，U1=32.00V，f1=50Hz）
-float Line_U1_Set = 24.00f;   // 输出电压（设定值）
-float Line_U1_Measure = 24.00f;   // 输出电压（测量值）(要改)
+//线电压有效值给定。面板无按键入口(上下键只改Line_f1),改这里是唯一途径。
+//折算成相电压峰值在control.c的调用处完成: Line_U1_Set*1.414/1.732
+float Line_U1_Set = 32.00f;   // 输出电压（设定值）
+float Line_U1_Measure = 32.00f;   // 输出电压（测量值）(未使用,显示走Uab_rms)
 float Line_I1 = 0.00f;                              // I1干路电流
 float Line_f1 = 50.00f;                             // 频率（默认50Hz）
+extern uint16_t ADC1_Value[4];
 
 #define HRTIM_ACTIVE_OUTPUTS \
     (HRTIM_OUTPUT_TA1 | HRTIM_OUTPUT_TA2 | HRTIM_OUTPUT_TB1 | \
@@ -278,7 +281,8 @@ static void UI_Show_Measure(void) {
     // 显示标题 
     OLED_ShowString(15, 0, "测量界面", OLED_8X16);
     OLED_ShowString(20, 16, "U1:", OLED_8X16);
-    OLED_ShowFloatNum(50, 16,Uab_rms , 2, 2, OLED_8X16);
+    //整数位必须>=2: OLED_ShowNum按IntLength截位, 写1时32.00会显示成"2.000"
+    OLED_ShowFloatNum(50, 16,Uab_rms, 2, 2, OLED_8X16);
     OLED_ShowString(20, 32, "I1:", OLED_8X16);
     OLED_ShowFloatNum(50, 32,Ia_rms , 2, 2, OLED_8X16);
     OLED_ShowString(20, 48, "f1:", OLED_8X16);

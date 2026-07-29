@@ -18,10 +18,18 @@
 #define CONTROL_SOFTSTART_SECONDS  0.20f
 /* 改居中脉冲后, 采样正确性不再依赖零矢量窗口宽度(见hrtim.h), 该限幅回归其
  * 本来的作用: 只做过调制保护。六边形内接圆对应 m=1.0, 留15%余量给瞬态。
- * m=0.85 对应线电压有效值上限 0.85*48/sqrt2 = 28.8V, 24V目标有充足余量。 */
+ * m=0.85 对应线电压有效值上限 0.85*60/sqrt2 = 36.1V, 32V目标余量12.7%。
+ * 注: 余量比48V/24V那一档(20%)小, 负载突变时更容易碰饱和, 碰到就靠
+ * modulation_saturated 走抗积分饱和, 不会失控但会短暂掉幅。 */
 #define CONTROL_MODULATION_LIMIT   0.85f
 
-float Udc = 48.0f;//直流母线电压
+/* 直流母线电压。工程无母线采样(ADC四通道全部用于Uab/Ia/Ubc/Ic), 故这是个
+   开环常数, 必须与实际母线一致。它是第7步归一化的分母:
+   写小了 -> 实际输出按 Udc_real/Udc_code 倍数超调, 且环路增益同比例放大
+   (48写在60上 = 增益×1.25, 8.89dB裕度掉到6.95dB);
+   写大了 -> 输出不足, 慢环要靠 rms_trim 往上补。
+   带载母线压降同样不被感知, 只能由慢环慢慢补。 */
+float Udc = 60.0f;//直流母线电压(实测值,改硬件必须同步改这里)
 float Uab_rms=0;//AB线电压有效值
 float Ia_rms=0;//A相线电流基波有效值(显示用)
 float Ia_rms_raw=0;//A相线电流原始RMS(含纹波,排查用)
@@ -345,7 +353,7 @@ void Volt_Loop_Control(float des_d,float des_q,float sita,uint16_t f) //单电�
 
 	//7.归一化（相电压到调制比m）
 	//本SVPWM的alpha/beta即调制比m = sqrt3 * 相电压峰值 / Udc
-	//(alpha幅值=1时对应相电压峰值Udc/sqrt3=27.7V,线电压有效值Udc/sqrt2=33.9V)
+	//(alpha幅值=1时对应相电压峰值Udc/sqrt3=34.6V,线电压有效值Udc/sqrt2=42.4V)
 	//所以必须乘sqrt3,只除Udc会让实际输出只有指令的1/sqrt3
 	float Phase_A_out = P_Crt_PhaseA.fpU * sqrt3 / Udc;
 	Phase_B_out = Phase_B_out * sqrt3 / Udc;
@@ -358,7 +366,7 @@ void Volt_Loop_Control(float des_d,float des_q,float sita,uint16_t f) //单电�
 	//8.参数计算显示
 	Uab_rms = Calculate_ACVoltage_RMS_AB(&input_volt1,f);//计算AB线电压有效值
 	//电流显示必须用基波提取, 不能用原始RMS:
-	//采样的是电感电流, 空载纹波峰峰约0.25A >> 基波峰值0.061A(C=9.9uF),
+	//采样的是电感电流, 空载纹波峰峰约0.31A >> 基波峰值0.081A(C=9.9uF,32V线电压),
 	//原始RMS把纹波也算进去 -> 空载会显示成几百mA以上, 那不是负载电流。
 	Ia_rms = Fundamental_RMS_Update(&fund_Ia, input_volt1.fpPha1CrtFB, sita, f);
 	//原始RMS保留为排查用(调试器watch), 与Ia_rms的差值即纹波+噪声含量
