@@ -59,14 +59,15 @@ void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
-  /* The master period is one complete 10 kHz PWM cycle (100 us). */
-  /* MUL2 -> fHRCK = 170MHz*2 = 340MHz, PER = 34000。
-     !! 必须是 MUL2, 不能是 MUL4 !!: MUL4(680MHz) 下 10kHz 需要 PER=68000,
-     超出 PER 寄存器上限 0xFFDF。降开关频率与降预分频是一组不可分的改动,
-     hrtim.h 里有 #error 守卫。pTimeBaseCfg 被 MASTER/A/B/C 复用, 改这一处即全生效。 */
+  /* The master period is one complete 20 kHz PWM cycle (50 us). */
+  /* MUL4 -> fHRCK = 170MHz*4 = 680MHz, PER = 34000, 每 tick 1.47ns。
+     !! 预分频必须与 HRTIM_PWM_FREQUENCY_HZ 同改 !!: MUL4 下 10kHz 需要 PER=68000,
+     超出 PER 寄存器上限 0xFFDF —— 这是当初 20k->10k 时必须一起降预分频的原因,
+     退回 20kHz 则无此约束。hrtim.h 里有 #error 守卫兜住配错的组合。
+     pTimeBaseCfg 被 MASTER/A/B/C 复用, 改这一处即全生效。 */
   pTimeBaseCfg.Period = HRTIM_PWM_PERIOD_TICKS;
   pTimeBaseCfg.RepetitionCounter = 0x00;
-  pTimeBaseCfg.PrescalerRatio = HRTIM_PRESCALERRATIO_MUL2;
+  pTimeBaseCfg.PrescalerRatio = HRTIM_PRESCALERRATIO_MUL4;
   pTimeBaseCfg.Mode = HRTIM_MODE_CONTINUOUS;
   if (HAL_HRTIM_TimeBaseConfig(&hhrtim1, HRTIM_TIMERINDEX_MASTER, &pTimeBaseCfg) != HAL_OK)
   {
@@ -92,7 +93,7 @@ void MX_HRTIM1_Init(void)
     Error_Handler();
   }
 
-  /* A/B/C use one up-counting 10 kHz period. CMP1 is the direct duty value. */
+  /* A/B/C use one up-counting 20 kHz period. CMP1 is the direct duty value. */
   pTimeBaseCfg.Period = HRTIM_PWM_PERIOD_TICKS;
   if (HAL_HRTIM_TimeBaseConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, &pTimeBaseCfg) != HAL_OK)
   {
@@ -109,8 +110,8 @@ void MX_HRTIM1_Init(void)
   pTimerCfg.DMARequests = HRTIM_TIM_DMA_NONE;
   pTimerCfg.PreloadEnable = HRTIM_PRELOAD_ENABLED;
   /* CMP preload values written by the ADC-DMA ISR are committed at the next
-     10 kHz period boundary, never during the active PWM period.
-     !! 一个周期只提交一次 !! 这就是"10kHz开关 + 20kHz双点采样"方案不成立的原因:
+     20 kHz period boundary, never during the active PWM period.
+     !! 一个周期只提交一次 !! 这就是"降开关频率但保持原控制频率"方案不成立的原因:
      两次ISR会争同一个 counter=0 装载边界, 后一次覆盖前一次, 一半控制量被丢弃。
      控制周期必须与开关周期一致 (control.c 顶部有 #error 守卫)。 */
   pTimerCfg.RepetitionUpdate = HRTIM_UPDATEONREPETITION_ENABLED;
@@ -150,11 +151,13 @@ void MX_HRTIM1_Init(void)
   }
   /* 死区已示波器实测约206ns/边, 与 280 tick @ tDTG=0.735ns 一致
      (即本配置下 fDTG = 1.36GHz)。
-     !! 降开关频率不需要改这里 !! RM0440: tDTG = 2^DTPRSC * (tHRTIM/8), 只与
-     fHRTIM(170MHz) 和 DTPRSC 有关, 与计数预分频 CKPSC 无关。故 MUL4->MUL2 后
-     死区仍是 280*0.735ns = 205.8ns。(这条错了是桥臂直通, 上机请示波器复核一次)
-     占一个10kHz周期的0.206%/边, 对应基波压降约0.2V —— 比20kHz时减半,
-     仍由有效值慢环兜住, 无需额外死区补偿。 */
+     !! 改开关频率不需要改这里 !! RM0440: tDTG = 2^DTPRSC * (tHRTIM/8), 只与
+     fHRTIM(170MHz) 和 DTPRSC 有关, 与计数预分频 CKPSC 无关。故 MUL2<->MUL4 切换后
+     死区恒为 280*0.735ns = 205.8ns。(10kHz 版本上机已实测确认死区正常)
+     电压误差 = Vdc*t_d*fsw = 60*205.8ns*20k = 0.247V (10kHz 时 0.124V)。
+     占相电压峰值 26.1V 的 0.95%, 由有效值慢环兜住幅值, 无需额外死区补偿。
+     注: 死区畸变的谱是 sign(i) 方波, 主要落在 5/7 次上 —— 正好被谐振器以
+     |H|=4.8 压掉, 所以它对 THD 的净贡献远小于 0.95% 这个数字。 */
   pDeadTimeCfg.Prescaler = HRTIM_TIMDEADTIME_PRESCALERRATIO_DIV8;
   pDeadTimeCfg.RisingValue = 280;
   pDeadTimeCfg.RisingSign = HRTIM_TIMDEADTIME_RISINGSIGN_POSITIVE;
@@ -271,7 +274,7 @@ void MX_HRTIM1_Init(void)
   }
   /* USER CODE BEGIN HRTIM1_Init 2 */
   //===== ADC采样与载波对齐 =====
-  /* 触发点取 PER-400, 使四通道扫描(800 tick @340MHz)居中于对称点 counter=0。
+  /* 触发点取 PER-800, 使四通道扫描(1600 tick @680MHz)居中于对称点 counter=0。
      居中脉冲下该点是电感电流纹波的平均点(推导见 hrtim.h)。 */
   pCompareCfg.CompareValue = HRTIM_ADC_SAMPLE_DELAY_TICKS;
   if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_MASTER,

@@ -12,7 +12,7 @@ void RMS_Init(RMS_Calculator *calc)
     memset(calc, 0, sizeof(RMS_Calculator));
 }
 
-// 更新采样值并计算有效值 (10 kHz control callback)
+// 更新采样值并计算有效值 (20 kHz control callback)
 float RMS_Update(RMS_Calculator *calc, float newSample , uint16_t f) 
 {
 	uint16_t a = (ADC_SAMPLE_RATE + f / 2) / f;//四舍五入 

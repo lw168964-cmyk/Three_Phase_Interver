@@ -36,14 +36,31 @@ extern HRTIM_HandleTypeDef hhrtim1;
 
 /* USER CODE BEGIN Private defines */
 
-/* HRTIM runs from 170 MHz x2 = 340 MHz (CKPSC = MUL2, 见 hrtim.c)。
- * !! 不要改回 MUL4 !! 10 kHz @ 680MHz 需要 PER=68000, 超过 PER 寄存器上限
- *    0xFFDF(65503) —— 这是 20kHz->10kHz 必须同时降预分频的唯一原因。
- *    (HAL 亦注明 MUL4 的最低 PWM 频率约 8.8kHz@144MHz, 折到170MHz是10.4kHz)
- * 巧合但省事: MUL2 下 PER 仍是 34000, 所有按 tick 写的数值(CMP限幅范围等)不变,
- * 只是每 tick 从 1.47ns 变 2.94ns。 */
-#define HRTIM_PWM_FREQUENCY_HZ       10000U
-#define HRTIM_PWM_TIMER_CLOCK_HZ     340000000UL
+/* HRTIM runs from 170 MHz x4 = 680 MHz (CKPSC = MUL4, 见 hrtim.c)。
+ *
+ * ===== 为什么从 10kHz 退回 20kHz =====
+ * 10kHz 曾用于降开关损耗, 但按损耗模型复算, 那笔账基本是平的:
+ *   只有两项随 f 变 —— 开关损耗 ∝ f, 磁芯损耗 ∝ f^(-1.1)
+ *   (Steinmetz P ∝ f^1.4 * B^2.5, 而 B ∝ 纹波 ∝ 1/f, 故 f^1.4 * f^-2.5)
+ *   10k->20k: 开关多约 0.43W, 磁损少 0.533*P_core(10k)
+ *   盈亏平衡在 P_core(10k)=0.81W; 13~20kHz 区间总损耗变化 <0.04W(极值很平)
+ * 即效率上两者相差约 0.1W(0.09个效率点), 仪表测不出来。真正的理由是控制:
+ *   控制延时 1.5Ts    150us -> 75us
+ *   f_LC 处延时相移   61.1deg -> 30.5deg
+ *   zeta_eff          0.0374 -> 0.0667  (Kp_i=2.2 不必改, 见 inital.c)
+ *   反阻尼边界1/(6Ts) 1667Hz -> 3333Hz, 距 f_LC=1131Hz 从 1.47x 拉到 2.95x
+ * 唯一代价: |L(w_LC)| 从 0.3495(9.13dB) 回到 0.3591(8.89dB) —— 双线性变换把
+ * 1131Hz 映到的等效模拟频率 w_a 从 7422 降到 7182 rad/s, 而 PR 残留 ∝ 1/w_a。
+ * 仍在 8dB 自设底线之上。
+ * 40kHz 已排除: 总损耗约 1.90W(vs 20k 的 1.31W), ISR 预算只剩 4250 cycle,
+ * 且 RMS_SAMPLE_COUNT 需翻到 2000(RAM 16.5->28.5kB)。
+ *
+ * !! 预分频必须与频率同改 !! 10kHz @ 680MHz 需要 PER=68000, 超过 PER 上限
+ *    0xFFDF(65503) —— 这是当初降频时必须同时降预分频的原因。20kHz 无此约束。
+ * 巧合但省事: MUL2/MUL4 下 PER 都是 34000, 所有按 tick 写的数值(CMP限幅范围等)
+ * 不变, 只是每 tick 从 2.94ns 回到 1.47ns。 */
+#define HRTIM_PWM_FREQUENCY_HZ       20000U
+#define HRTIM_PWM_TIMER_CLOCK_HZ     680000000UL
 #define HRTIM_PWM_PERIOD_TICKS       \
     (HRTIM_PWM_TIMER_CLOCK_HZ / HRTIM_PWM_FREQUENCY_HZ)
 
@@ -84,26 +101,27 @@ extern HRTIM_HandleTypeDef hhrtim1;
 
 /* ===== ADC 触发点 =====
  * 目标: 让四通道扫描"居中"于对称点 counter=0 (周期边界, 两端000窗口的中心)。
- * 四通道扫描耗时 = 4*(12.5+12.5)/42.5MHz = 2.353us = 800 tick @340MHz,
- * 故提前半个扫描长度触发: PER - 400。
+ * 四通道扫描耗时 = 4*(12.5+12.5)/42.5MHz = 2.353us = 1600 tick @680MHz,
+ * 故提前半个扫描长度触发: PER - 800。
  *   rank1(Uab) 采样于 -0.80us, rank4(Ic) 采样于 +0.88us, 平均偏移约 0
  * 单通道相对对称点的最大偏移 ~1.18us, 残余纹波误差 = (di/dt)*offset,
  * 空载 di/dt=v_c/L=26.1/2mH=13060A/s -> 约 15mA, 远小于原方案的 0.15A。
  * (24V档时 9800A/s -> 11mA; 误差与信号同比例增长, 占基波峰值恒为约14%)
- * !! 该误差只取决于扫描的绝对时长, 与开关频率无关 -> 20kHz降到10kHz后不变,
- *    尽管电感纹波本身翻倍(0.31->0.62A峰峰)。这是对称点采样的核心好处。
+ * !! 该误差只取决于扫描的绝对时长, 与开关频率无关 -> 10kHz 退回 20kHz 后不变,
+ *    尽管电感纹波本身减半(0.62->0.31A峰峰)。这是对称点采样的核心好处:
+ *    改频率不需要重新评估采样误差, 只有 ADC 采样时间和通道数会影响它。
  *
  * 选 counter=0 而非 counter=PER/2 的原因: CMP 预装载也在 counter=0 生效,
- * 于是 ISR 从扫描结束到下一个装载边界仍有接近一整个 PWM 周期(10kHz下约98.8us)
- * 的预算 —— 降频后余量反而翻倍。
+ * 于是 ISR 从扫描结束到下一个装载边界仍有接近一整个 PWM 周期(20kHz下约48.8us)
+ * 的预算 —— 不缩减 ctrl_cycles 的时间余量。
  *
- * 10kHz 下零矢量窗口宽到能装 24.5 周期采样(3.482us)了, 但!! 不要改回去 !!:
- * 对称点采样的误差 ∝ 扫描时长, 24.5周期会把单通道最大偏移从1.18us推到1.74us,
- * 误差 15mA->23mA。窗口够用不等于该用更长的扫描。12.5 周期对应源阻抗上限
- * 约 6.5k欧, 现有分压网络/传感器满足即可。
+ * 采样时间保持 12.5 周期(不用 24.5): 对称点采样的误差 ∝ 扫描时长, 24.5 周期会把
+ * 单通道最大偏移从 1.18us 推到 1.74us, 误差 15mA->23mA。12.5 周期对应源阻抗上限
+ * 约 6.5k欧, 现有分压网络/传感器满足即可。(10kHz 时零矢量窗口宽到能装 24.5 周期,
+ * 但窗口够用不等于该用更长的扫描 —— 20kHz 下窗口本就不够, 结论不变。)
  *
- * 触发点 = PER - 400 = 33600 tick (= 98.82us, 即对称点前 1.18us)。 */
-#define HRTIM_ADC_SCAN_TICKS         800U
+ * 触发点 = PER - 800 = 33200 tick (= 48.82us, 即对称点前 1.18us)。 */
+#define HRTIM_ADC_SCAN_TICKS         1600U
 #define HRTIM_ADC_SAMPLE_DELAY_TICKS \
     (HRTIM_PWM_PERIOD_TICKS - (HRTIM_ADC_SCAN_TICKS / 2U))
 

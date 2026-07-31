@@ -55,7 +55,7 @@ void MX_ADC1_Init(void)
   hadc1.Init.ContinuousConvMode = DISABLE;              // One scan is started by each HRTIM trigger.
   hadc1.Init.NbrOfConversion = 4;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
-  //HRTIM TRG1 fires once per 10 kHz carrier, positioned so the four-channel
+  //HRTIM TRG1 fires once per 20 kHz carrier, positioned so the four-channel
   //scan straddles counter=0 (the ripple-average instant, see hrtim.h).
   //The DMA complete callback runs the controller after this full scan finishes.
   hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIG_HRTIM_TRG1;
@@ -69,8 +69,8 @@ void MX_ADC1_Init(void)
      HAL_ADC_ErrorCallback不执行,故障完全不可见。 */
   hadc1.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
   /* Four 12-bit conversions take about 2.35 us at 42.5 MHz, leaving ample
-     time for the 10 kHz control ISR before the next PWM update boundary
-     (10kHz下预算约98.8us, 是20kHz时的两倍)。 */
+     time for the 20 kHz control ISR before the next PWM update boundary
+     (20kHz下预算约48.8us; ISR 实测耗时读 ctrl_cycles_max, 上限 8500 cycle)。 */
   hadc1.Init.OversamplingMode = DISABLE;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
@@ -89,9 +89,9 @@ void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_1;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  /* !! 10kHz 下零矢量窗口已宽到能装 24.5 周期, 但仍保持 12.5, 理由见 hrtim.h:
-        对称点采样误差 ∝ 扫描时长, 24.5周期会把误差从 15mA 推到 23mA。
-        下面这段是 20kHz 时代的原始推导, 保留以说明 12.5 的另一层动机。 */
+  /* 保持 12.5 周期。两条独立的理由, 任一条都足够:
+       (1) 对称点采样误差 ∝ 扫描时长, 24.5 周期会把误差从 15mA 推到 23mA;
+       (2) 20kHz 下零矢量窗口本就装不进 24.5 周期的四通道扫描 —— 下面是原始推导。 */
   /* 采样时间 24.5 -> 12.5 周期, 与 HRTIM_ADC_SAMPLE_DELAY_TICKS 的前移是一组改动。
      原因: 单通道耗时 = (SMP+12.5)/42.5MHz, 24.5周期时四通道共 3.482us;
      从原起点 3.60us 起扫需要前沿111零矢量窗口 >= 7.08us, 而窗口宽度
