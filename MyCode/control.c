@@ -58,10 +58,10 @@ static uint8_t modulation_saturated = 0U;  //本基波周期内调制是否饱�
 
 /* ===== 控制环时序实测 =====
    用DWT周期计数器直接量,不靠估算。全部volatile,调试器watch窗口可直接读。
-   SystemCoreClock=170MHz -> 一个20kHz周期 = 8500 cycle。
+   SystemCoreClock=170MHz -> 一个10kHz周期 = 17000 cycle。
    判读:
-     ctrl_cycles_max  < 8500      -> 中断跑得完,不超时
-     ctrl_entry_delta_max ~= 8500 -> 触发节奏准,输出频率由晶振决定
+     ctrl_cycles_max  < 17000      -> 中断跑得完,不超时
+     ctrl_entry_delta_max ~= 17000 -> 触发节奏准,输出频率由晶振决定
      ctrl_missed_trig > 0         -> 有周期没进中断,输出频率会偏低(这才会造成频率不稳) */
 #define CTRL_CYCLES_PER_PERIOD   (170000000UL / CTRL_FREQUENCY)
 
@@ -134,12 +134,38 @@ static void Reset_PI_State(ST_PID *controller)
    取4.8而非6.0: 留一档给上机后可能需要的微调, 且谐波抑制已达 |H5|=4.45。 */
 #define HARMONIC_KR       4.8f
 
+/* ===== Tustin 频率预畸变 =====
+ * PR_Init 用双线性变换离散化, 它把模拟频率 w 映射到数字频率 wd:
+ *     w = (2/T)*tan(wd*T/2)
+ * 所以直接把 omiga_0 写成 2*pi*f, 数字谐振峰实际落在比 f 略低的地方。
+ * 峰位误差 ≈ f*( (w0*T/2)^2 /3 ), 对基波无所谓, 对谐振器是致命的:
+ * omiga_c=2.0 使半功率带宽只有 ±0.32Hz, 而
+ *   Ts=50us:  7次峰位偏 0.35Hz -> |H7|@350Hz = 3.21 (即代码里记录的实测值)
+ *   Ts=100us: 7次峰位偏 1.40Hz -> |H7|@350Hz = 1.05  <-- 降频后谐振器基本失效
+ *             5次峰位偏 0.51Hz -> |H5|@250Hz = 2.52 (原 4.45)
+ * 预畸变后数字峰精确落在目标频率, |H5|=|H7|=Kp+Kr=4.8, 比降频前还好一点。
+ *
+ * 对 LC 稳定裕度无副作用: 谐振器在远离峰处的残留增益 ≈ 2*Kr*wc/w, 与 omiga_0
+ * 几乎无关。用同一差分方程模型复算 |L(w_LC)| (基波+5次+7次的最坏情况同相叠加):
+ *     20kHz 无预畸变  0.3591 (8.90dB)   <- 与本文件原记录的 0.3592/8.89dB 一致
+ *     10kHz 有预畸变  0.3495 (9.13dB)
+ * 即降频+预畸变后裕度反而略增: Tustin 把 w_a 从 7182 推到 7421 rad/s,
+ * PR 的 1/w 残留同比下降。空载稳定判据不因降频而破。
+ *
+ * 基波 PR 也走同一函数: 50Hz 处畸变量仅 0.005Hz(带宽 ±0.95Hz), 可忽略,
+ * 统一处理只是为了不留第二套公式。 */
+static float PR_PrewarpOmega(float hz, float dt)
+{
+	//tanf 参数 = pi*f*T; 最高用到 800Hz@10kHz -> 0.251 rad, 远离 pi/2, 安全
+	return (2.0f / dt) * tanf(3.1415926f * hz * dt);
+}
+
 //按基波频率重算一个谐波谐振器。超出安全频率则令其失效并清状态。
 static void Harmonic_Retune(ST_PR *pr, float hz, uint8_t order)
 {
 	const float fh = hz * (float)order;
 
-	pr->omiga_0 = 2.0f * 3.1415926f * fh;
+	pr->omiga_0 = PR_PrewarpOmega(fh, pr->fpDt);
 	if (fh > HARMONIC_MAX_HZ)
 	{
 		pr->Kr = 0.0f;
@@ -155,7 +181,7 @@ static void Harmonic_Retune(ST_PR *pr, float hz, uint8_t order)
 
 void Control_SetFundamentalFreq(float hz)
 {
-	const float w0 = 2.0f * 3.1415926f * hz;
+	const float w0 = PR_PrewarpOmega(hz, PR_Volt_PhaseA.fpDt);
 	uint32_t primask = __get_PRIMASK();
 
 	//系数是5个变量的一组,ISR读到"新旧混搭"会瞬时改变差分方程的极点,

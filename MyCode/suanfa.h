@@ -8,7 +8,10 @@
 typedef float fp32;
 typedef double fp64;
 
-#define CTRL_FREQUENCY 20000U  // One control update per 20 kHz PWM carrier.
+/* One control update per 10 kHz PWM carrier.
+   必须等于 HRTIM_PWM_FREQUENCY_HZ (control.c 顶部 #error 守卫)。
+   CTRL_DT 由此推出, PR/PI 系数在 PR_Init 里按 fpDt 自动重算。 */
+#define CTRL_FREQUENCY 10000U
 #define CTRL_DT (fp32)(1.0f / CTRL_FREQUENCY)//控制周期
 
 /*PID控制器结构体*/

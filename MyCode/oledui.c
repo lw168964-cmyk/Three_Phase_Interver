@@ -185,6 +185,8 @@ void OLEDUI_Key_Handle(void) {
 									Error_Handler();
 								}
 								Control_Enable();
+								/* 计数器和输出都起来后抄一次寄存器, 供调试器 watch hrtim_regs 判读(见 hrtim.c)。 */
+								HRTIM_CaptureRegs();
                 OLEDUI_Refresh();
             }
             if (key_back) {        // 返回：回到开始界面
@@ -282,8 +284,10 @@ static void UI_Show_Measure(void) {
     OLED_ShowString(15, 0, "测量界面", OLED_8X16);
     OLED_ShowString(20, 16, "U1:", OLED_8X16);
     //整数位必须>=2: OLED_ShowNum按IntLength截位, 写1时32.00会显示成"2.000"
-    OLED_ShowFloatNum(50, 16,Uab_rms, 2, 2, OLED_8X16);
+    // OLED_ShowFloatNum(50, 16,(float)(ADC1_Value[1])*3.3f/4096.0f, 1, 3, OLED_8X16);
+    OLED_ShowFloatNum(50, 16,Uab_rms, 2, 3, OLED_8X16);
     OLED_ShowString(20, 32, "I1:", OLED_8X16);
+    // OLED_ShowFloatNum(50, 32,(float)(ADC1_Value[3])*3.3f/4096.0f, 1    , 3, OLED_8X16);
     OLED_ShowFloatNum(50, 32,Ia_rms , 2, 2, OLED_8X16);
     OLED_ShowString(20, 48, "f1:", OLED_8X16);
     OLED_ShowFloatNum(50, 48, Line_f1, 2, 1, OLED_8X16);

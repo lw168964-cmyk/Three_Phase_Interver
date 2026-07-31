@@ -5,11 +5,17 @@
 #include "suanfa.h"
 
 #define ADC_SAMPLE_RATE  CTRL_FREQUENCY
-#define RMS_SAMPLE_COUNT 1000U  // 20 Hz at 20 kHz requires 1000 samples per period.
+/* 20 Hz at 10 kHz requires 500 samples per period.
+   保留 1000 是为了给 RMS_Update 的窗口 a 留裕度(a 被钳在此值以内),
+   下限是 500 —— 面板频率下限 20Hz 时 a=500, 低于此值窗口会被截断,
+   RMS 就不再是整周期有效值。 */
+#define RMS_SAMPLE_COUNT 1000U
 
-//零点慢速跟踪系数:fc约0.5Hz,扣除采样零点漂移(输出直流分量的来源)
+//零点慢速跟踪系数:fc = K*fs/(2*pi) 约0.48Hz,扣除采样零点漂移(输出直流分量的来源)
 //50Hz处衰减可忽略,相移仅0.5度
-#define DC_TRACK_K   0.0001500f
+//!! 该系数与采样率耦合 !! fs 20k->10k 时必须翻倍(1.5e-4 -> 3.0e-4)才能保持同一fc,
+//   否则跟踪带宽减半、零点收敛慢一倍。这是一次等效改动, 不改变闭环行为。
+#define DC_TRACK_K   0.0003000f
 //交流电压反馈一阶低通系数
 //!! 必须保持1.0(旁路) !! 这条反馈决定外环在LC谐振点(L=2mH,C=9.9uF -> 1131Hz)的相位裕度,
 //   任何额外低通都会在谐振处叠加滞后,空载(负载阻尼消失)时导致振荡

@@ -59,10 +59,14 @@ void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
-  /* The master period is one complete 20 kHz PWM cycle (50 us). */
+  /* The master period is one complete 10 kHz PWM cycle (100 us). */
+  /* MUL2 -> fHRCK = 170MHz*2 = 340MHz, PER = 34000。
+     !! 必须是 MUL2, 不能是 MUL4 !!: MUL4(680MHz) 下 10kHz 需要 PER=68000,
+     超出 PER 寄存器上限 0xFFDF。降开关频率与降预分频是一组不可分的改动,
+     hrtim.h 里有 #error 守卫。pTimeBaseCfg 被 MASTER/A/B/C 复用, 改这一处即全生效。 */
   pTimeBaseCfg.Period = HRTIM_PWM_PERIOD_TICKS;
   pTimeBaseCfg.RepetitionCounter = 0x00;
-  pTimeBaseCfg.PrescalerRatio = HRTIM_PRESCALERRATIO_MUL4;
+  pTimeBaseCfg.PrescalerRatio = HRTIM_PRESCALERRATIO_MUL2;
   pTimeBaseCfg.Mode = HRTIM_MODE_CONTINUOUS;
   if (HAL_HRTIM_TimeBaseConfig(&hhrtim1, HRTIM_TIMERINDEX_MASTER, &pTimeBaseCfg) != HAL_OK)
   {
@@ -88,7 +92,7 @@ void MX_HRTIM1_Init(void)
     Error_Handler();
   }
 
-  /* A/B/C use one up-counting 20 kHz period. CMP1 is the direct duty value. */
+  /* A/B/C use one up-counting 10 kHz period. CMP1 is the direct duty value. */
   pTimeBaseCfg.Period = HRTIM_PWM_PERIOD_TICKS;
   if (HAL_HRTIM_TimeBaseConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, &pTimeBaseCfg) != HAL_OK)
   {
@@ -105,7 +109,10 @@ void MX_HRTIM1_Init(void)
   pTimerCfg.DMARequests = HRTIM_TIM_DMA_NONE;
   pTimerCfg.PreloadEnable = HRTIM_PRELOAD_ENABLED;
   /* CMP preload values written by the ADC-DMA ISR are committed at the next
-     20 kHz period boundary, never during the active PWM period. */
+     10 kHz period boundary, never during the active PWM period.
+     !! 一个周期只提交一次 !! 这就是"10kHz开关 + 20kHz双点采样"方案不成立的原因:
+     两次ISR会争同一个 counter=0 装载边界, 后一次覆盖前一次, 一半控制量被丢弃。
+     控制周期必须与开关周期一致 (control.c 顶部有 #error 守卫)。 */
   pTimerCfg.RepetitionUpdate = HRTIM_UPDATEONREPETITION_ENABLED;
   pTimerCfg.PushPull = HRTIM_TIMPUSHPULLMODE_DISABLED;
   pTimerCfg.FaultEnable = HRTIM_TIMFAULTENABLE_NONE;
@@ -142,8 +149,12 @@ void MX_HRTIM1_Init(void)
     Error_Handler();
   }
   /* 死区已示波器实测约206ns/边, 与 280 tick @ tDTG=0.735ns 一致
-     (即本配置下 fDTG = 1.36GHz)。占一个20kHz周期的0.41%/边,
-     对应基波压降约0.4V, 由有效值慢环兜住, 无需额外死区补偿。 */
+     (即本配置下 fDTG = 1.36GHz)。
+     !! 降开关频率不需要改这里 !! RM0440: tDTG = 2^DTPRSC * (tHRTIM/8), 只与
+     fHRTIM(170MHz) 和 DTPRSC 有关, 与计数预分频 CKPSC 无关。故 MUL4->MUL2 后
+     死区仍是 280*0.735ns = 205.8ns。(这条错了是桥臂直通, 上机请示波器复核一次)
+     占一个10kHz周期的0.206%/边, 对应基波压降约0.2V —— 比20kHz时减半,
+     仍由有效值慢环兜住, 无需额外死区补偿。 */
   pDeadTimeCfg.Prescaler = HRTIM_TIMDEADTIME_PRESCALERRATIO_DIV8;
   pDeadTimeCfg.RisingValue = 280;
   pDeadTimeCfg.RisingSign = HRTIM_TIMDEADTIME_RISINGSIGN_POSITIVE;
@@ -190,8 +201,26 @@ void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
+  /* ===== 互补输出 TA2/TB2/TC2 =====
+     交叉开关置空: DTEN=1 时输出2由死区发生器从"输出1的发生器信号"导出,
+     其交叉开关被硬件忽略(RM0440 28.3.4), 置空是正确做法, 不是遗漏。
+     !! 极性必须刻意选, 不能靠复用 TA1 的结构体继承 !! 见 hrtim.h 的
+     HRTIM_COMP_OUTPUT_ACTIVE_LOW: 若低边驱动低有效而这里留 HIGH,
+     低边管全程关断 —— 现象就是"CHx2 无波形/与CHx1同相"。
+     其余字段(IdleMode/IdleLevel/FaultLevel/Chopper)显式重述一遍,
+     使这段不再依赖上面 TA1 分支遗留的结构体内容。 */
   pOutputCfg.SetSource = HRTIM_OUTPUTSET_NONE;
   pOutputCfg.ResetSource = HRTIM_OUTPUTRESET_NONE;
+#if HRTIM_COMP_OUTPUT_ACTIVE_LOW
+  pOutputCfg.Polarity = HRTIM_OUTPUTPOLARITY_LOW;
+#else
+  pOutputCfg.Polarity = HRTIM_OUTPUTPOLARITY_HIGH;
+#endif
+  pOutputCfg.IdleMode = HRTIM_OUTPUTIDLEMODE_NONE;
+  pOutputCfg.IdleLevel = HRTIM_OUTPUTIDLELEVEL_INACTIVE;
+  pOutputCfg.FaultLevel = HRTIM_OUTPUTFAULTLEVEL_NONE;
+  pOutputCfg.ChopperModeEnable = HRTIM_OUTPUTCHOPPERMODE_DISABLED;
+  pOutputCfg.BurstModeEntryDelayed = HRTIM_OUTPUTBURSTMODEENTRY_REGULAR;
   if (HAL_HRTIM_WaveformOutputConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A, HRTIM_OUTPUT_TA2, &pOutputCfg) != HAL_OK)
   {
     Error_Handler();
@@ -242,7 +271,7 @@ void MX_HRTIM1_Init(void)
   }
   /* USER CODE BEGIN HRTIM1_Init 2 */
   //===== ADC采样与载波对齐 =====
-  /* 触发点取 PER-800, 使四通道扫描(1600 tick)居中于对称点 counter=0。
+  /* 触发点取 PER-400, 使四通道扫描(800 tick @340MHz)居中于对称点 counter=0。
      居中脉冲下该点是电感电流纹波的平均点(推导见 hrtim.h)。 */
   pCompareCfg.CompareValue = HRTIM_ADC_SAMPLE_DELAY_TICKS;
   if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_MASTER,
@@ -263,6 +292,19 @@ void MX_HRTIM1_Init(void)
   {
     Error_Handler();
   }
+
+  /* 互补波的开关是 OUTxR 的 DTEN 位。RM0440 规定它在 TxCEN 置位或输出已使能后
+     不可再改, 所以只能在这里(计数器未启动、OENR 仍为0)设置。上面的
+     WaveformTimerConfig 已经写过, 这里做一次落地确认: 若三路里有任何一路
+     DTEN=0, 后面就不可能有互补波, 且运行中无法补救 —— 直接停在这里,
+     比带着单边驱动上电安全。 */
+  if (((hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_A].OUTxR & HRTIM_OUTR_DTEN) == 0U) ||
+      ((hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_B].OUTxR & HRTIM_OUTR_DTEN) == 0U) ||
+      ((hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_C].OUTxR & HRTIM_OUTR_DTEN) == 0U))
+  {
+    Error_Handler();
+  }
+  HRTIM_CaptureRegs();
   /* USER CODE END HRTIM1_Init 2 */
   HAL_HRTIM_MspPostInit(&hhrtim1);
 
@@ -342,5 +384,34 @@ void HAL_HRTIM_MspDeInit(HRTIM_HandleTypeDef* hrtimHandle)
 }
 
 /* USER CODE BEGIN 1 */
+
+volatile HRTIM_RegSnapshot hrtim_regs;
+
+/* 抄一份互补输出相关的寄存器现值。调试器 watch hrtim_regs 即可判读:
+ *   outar/outbr/outcr 应为 0x00000100
+ *     bit8  DTEN=1   <- 死区发生器使能, 这是互补波的开关
+ *     bit1  POL1=0   <- CHx1 高有效
+ *     bit17 POL2=0   <- CHx2 高有效 (HRTIM_COMP_OUTPUT_ACTIVE_LOW=1 时应为 0x00020100)
+ *   dtar/dtbr/dtcr 应为 0x01180118
+ *     DTR[8:0]=0x118=280, DTF[24:16]=0x118=280, DTPRSC[12:10]=0, SDTR/SDTF=0
+ *   oenr  在按下确认键(WaveformOutputStart)之后应为 0x0000003F (六路全开)
+ *   mcr   计数器启动后 bit16..19 (MCEN/TACEN/TBCEN/TCCEN) 应置位
+ *
+ * 判读方法:
+ *   DTEN=0            -> 死区发生器没开, CHx2 恒为非活动电平(无波形)
+ *   DTEN=1 但 CHx2 无波 -> 不是 HRTIM 的问题, 查 POL2 与驱动板输入极性, 或走线
+ *   oenr 不含对应位   -> 输出没使能(没进 UI_Measure, 或被 WaveformOutputStop 关了)
+ */
+void HRTIM_CaptureRegs(void)
+{
+    hrtim_regs.outar = hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_A].OUTxR;
+    hrtim_regs.outbr = hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_B].OUTxR;
+    hrtim_regs.outcr = hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_C].OUTxR;
+    hrtim_regs.dtar  = hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_A].DTxR;
+    hrtim_regs.dtbr  = hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_B].DTxR;
+    hrtim_regs.dtcr  = hhrtim1.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_C].DTxR;
+    hrtim_regs.oenr  = hhrtim1.Instance->sCommonRegs.OENR;
+    hrtim_regs.mcr   = hhrtim1.Instance->sMasterRegs.MCR;
+}
 
 /* USER CODE END 1 */

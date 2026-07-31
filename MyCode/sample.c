@@ -12,7 +12,7 @@ void RMS_Init(RMS_Calculator *calc)
     memset(calc, 0, sizeof(RMS_Calculator));
 }
 
-// 更新采样值并计算有效值 (20 kHz control callback)
+// 更新采样值并计算有效值 (10 kHz control callback)
 float RMS_Update(RMS_Calculator *calc, float newSample , uint16_t f) 
 {
 	uint16_t a = (ADC_SAMPLE_RATE + f / 2) / f;//四舍五入 
@@ -109,7 +109,7 @@ float Calculate_ACCurrent_RMS_A(ST_ELEC_OBS *pstM,uint16_t f)
 //交流侧电流采样A(线电流)
 void Cal_ACCurrent_A(ST_ELEC_OBS *pstM)
 {
-	float raw = (float)((ADC1_Value[1])*3.3f/4096.f-1.646f)/0.2f;
+	float raw = (float)((ADC1_Value[1])*3.3f/4096.f-1.650f)/0.2f;
 	//慢速跟踪并扣除零点:硬编码的1.646V与实际零点有偏差,直接变成环路的直流误差
 	pstM->fpPha1CrtDC += DC_TRACK_K * (raw - pstM->fpPha1CrtDC);
 	pstM->fpPha1CrtFB = raw - pstM->fpPha1CrtDC;
@@ -120,7 +120,7 @@ void Cal_ACCurrent_A(ST_ELEC_OBS *pstM)
 //交流侧电流采样C(线电流)
 void Cal_ACCurrent_C(ST_ELEC_OBS *pstM)
 {
-	float raw = (float)((ADC1_Value[3])*3.3f/4096.f-1.646f)/0.2f;
+	float raw = (float)((ADC1_Value[3])*3.3f/4096.f-1.650f)/0.2f;
 	pstM->fpPha3CrtDC += DC_TRACK_K * (raw - pstM->fpPha3CrtDC);
 	pstM->fpPha3CrtFB = raw - pstM->fpPha3CrtDC;
 	pstM->fpPha3CrtFilt += CRT_FILT_K * (pstM->fpPha3CrtFB - pstM->fpPha3CrtFilt);
@@ -169,7 +169,7 @@ float Calculate_ACVoltage_RMS_BC(ST_ELEC_OBS *pstM,uint16_t f)
    非线性环节。既然增益不能改, 这条就是输出电压不宜再往上提的原因。 */
 void Cal_ACVolt_AB(ST_ELEC_OBS *pstM)
 {
-	float raw = (float)((ADC1_Value[0])*3.3f/4096.0f-1.644f)*34.977f;
+	float raw = (float)((ADC1_Value[0])*3.3f/4096.0f-1.640f)*35.1617f;
 	//1.慢速跟踪并扣除零点:零点误差经前馈会变成输出直流分量(实测Ua有-1.96%直流)
 	pstM->fpABVoltDC += DC_TRACK_K * (raw - pstM->fpABVoltDC);
 	raw -= pstM->fpABVoltDC;
@@ -186,7 +186,7 @@ void Cal_ACVolt_BC(ST_ELEC_OBS *pstM)
 	   去调节, 会主动把输出调成三相不对称, 而THD指标看不出来。
 	   零点偏差(1.644 vs 1.656)由DC_TRACK慢跟踪消除, 无需强求一致。
 	   若两路实际分压比确有差异, 应在硬件上配对电阻, 而不是在这里补偿。 */
-	float raw = (float)((ADC1_Value[2])*3.3f/4096.f-1.656f)*35.0f;
+	float raw = (float)((ADC1_Value[2])*3.3f/4096.f-1.640f)*35.3857f;
 	pstM->fpBCVoltDC += DC_TRACK_K * (raw - pstM->fpBCVoltDC);
 	raw -= pstM->fpBCVoltDC;
 	pstM->fpBCVolt += VOLT_FILT_K * (raw - pstM->fpBCVolt);
