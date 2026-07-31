@@ -17,9 +17,25 @@
 UI_State g_current_ui = UI_START;                   // 默认初始界面为"开始界面"
 
 // 参数（I1=0.00A，U1=32.00V，f1=50Hz）
-//线电压有效值给定。面板无按键入口(上下键只改Line_f1),改这里是唯一途径。
-//折算成相电压峰值在control.c的调用处完成: Line_U1_Set*1.414/1.732
+//线电压有效值给定。运行中可在 UI_VoltSet 界面用 PB4/PB3 以 0.05V 步进调节。
+//折算成相电压峰值在control.c的调用处完成: Line_U1_Set*0.8164966
 float Line_U1_Set = 32.00f;   // 输出电压（设定值）
+
+/* ===== 调压界面的步进与上下限 =====
+ * 步进 0.05V: 相当于 32V 上的 0.16%, PR环几个基波周期内跟上; 慢环误差项按给定值
+ * 归一化, 所以 rms_trim 会自己重新收敛, 不需要复位。
+ *
+ * 上限 36.00V 的来历(不是随便取的整数):
+ *   control.c 把给定折算成相电压峰值 Line_U1_Set*sqrt2/sqrt3, 再乘 sqrt3/Udc 归一化,
+ *   于是 m = Line_U1_Set*sqrt2/Udc = Line_U1_Set/42.43。
+ *   CONTROL_MODULATION_LIMIT=0.85 -> 给定上限 0.85*42.43 = 36.07V。
+ *   取 36.00V: 再往上调制限幅就会削顶并触发抗积分饱和, 给定加了但输出不跟,
+ *   界面上看着能加实际加不上去 —— 所以在这里就拦住。
+ *   注意这条上限跟着 Udc 走(60V母线), 换母线电压必须重算。
+ * 下限 20.00V: 低于此值 m<0.47, 死区压降占比变大且无实际用途。 */
+#define VOLT_SET_STEP   0.05f
+#define VOLT_SET_MIN    20.00f
+#define VOLT_SET_MAX    36.00f
 float Line_U1_Measure = 32.00f;   // 输出电压（测量值）(未使用,显示走Uab_rms)
 float Line_I1 = 0.00f;                              // I1干路电流
 float Line_f1 = 50.00f;                             // 频率（默认50Hz）
@@ -41,6 +57,8 @@ extern uint16_t ADC1_Value[4];
 static void UI_Show_Start(void);                    // 显示"开始界面"
 static void UI_Show_Measure(void);               // 显示"参数显示界面"
 static void UI_Show_Set(void);               // 显示"参数显示界面"
+static void UI_Show_VoltSet(void);           // 显示"调压界面"
+static void OLEDUI_Stop_Output(void);        // 停机(UI_Measure/UI_VoltSet 共用)
 static void HRTIM_ApplyNeutralState(void);
 static void HRTIM_ForcePrimaryOutputsInactive(void);
 
@@ -123,6 +141,9 @@ void OLEDUI_Refresh(void) {
         case UI_Measure:
             UI_Show_Measure();
             break;
+        case UI_VoltSet:
+            UI_Show_VoltSet();
+            break;
         default:
             g_current_ui = UI_START; // 异常状态下返回开始界面
             UI_Show_Start();
@@ -130,6 +151,24 @@ void OLEDUI_Refresh(void) {
     }
     
     OLED_Update(); // 更新OLED显存到屏幕
+}
+
+/* 停机序列。UI_Measure 与 UI_VoltSet 同属运行态, 两处按PB5都要走同一套流程,
+   提出来避免两份拷贝走偏(顺序错了会留下带电的输出)。 */
+static void OLEDUI_Stop_Output(void)
+{
+    /* Outputs must be disabled before a waveform counter can stop. */
+    Control_Disable();
+    if (HAL_HRTIM_WaveformOutputStop(&hhrtim1, HRTIM_ACTIVE_OUTPUTS) != HAL_OK)
+    {
+        Error_Handler();
+    }
+    if (HAL_HRTIM_WaveformCountStop(&hhrtim1, HRTIM_ACTIVE_COUNTERS) != HAL_OK)
+    {
+        Error_Handler();
+    }
+    Control_Reset();
+    HRTIM_ApplyNeutralState();
 }
 
 // -------------------------- 按键处理核心函数 --------------------------
@@ -210,23 +249,40 @@ void OLEDUI_Key_Handle(void) {
 							OLEDUI_Apply_Freq();
                 OLEDUI_Refresh(); // 刷新参数显示
             }
-            if (key_ok) {          // 确认：进入单网测量界面
+            if (key_ok) {          // 确认(PB6)：切到调压界面, 输出保持运行不打断
+                g_current_ui = UI_VoltSet;
                 OLEDUI_Refresh();
             }
-            if (key_back) {        // 返回：回到开始界面
+            if (key_back) {        // 返回：停机并回到调频设定界面
                 g_current_ui = UI_Set;
-								/* Outputs must be disabled before a waveform counter can stop. */
-								Control_Disable();
-								if (HAL_HRTIM_WaveformOutputStop(&hhrtim1, HRTIM_ACTIVE_OUTPUTS) != HAL_OK)
-								{
-									Error_Handler();
-								}
-								if (HAL_HRTIM_WaveformCountStop(&hhrtim1, HRTIM_ACTIVE_COUNTERS) != HAL_OK)
-								{
-									Error_Handler();
-								}
-								Control_Reset();
-								HRTIM_ApplyNeutralState();
+                OLEDUI_Stop_Output();
+                OLEDUI_Refresh();
+            }
+            break;
+            // -------------------------- 4. 调压界面按键逻辑(运行中) --------------------------
+            /* 与 UI_Measure 是同一个运行态的两个视图: 这里不碰 HRTIM 也不碰控制使能,
+               只改给定值, 所以 PB6 来回切换不会打断输出。
+               Line_U1_Set 是4字节对齐的float, M4上单次写入本身原子, 控制中断读到的
+               要么是旧值要么是新值, 不会撕裂 —— 所以不需要像改频率那样屏蔽中断
+               (改频率要同时更新 w/Fo/谐振系数多个量, 那才必须成组保护)。 */
+        case UI_VoltSet:
+            if (key_up) {          // PB4: 线电压有效值 +0.05V
+                Line_U1_Set += VOLT_SET_STEP;
+                if (Line_U1_Set > VOLT_SET_MAX) { Line_U1_Set = VOLT_SET_MAX; }
+                OLEDUI_Refresh();
+            }
+            if (key_down) {        // PB3: 线电压有效值 -0.05V
+                Line_U1_Set -= VOLT_SET_STEP;
+                if (Line_U1_Set < VOLT_SET_MIN) { Line_U1_Set = VOLT_SET_MIN; }
+                OLEDUI_Refresh();
+            }
+            if (key_ok) {          // 确认(PB6)：切回调频界面
+                g_current_ui = UI_Measure;
+                OLEDUI_Refresh();
+            }
+            if (key_back) {        // 返回：与调频界面一致, 停机回到设定界面
+                g_current_ui = UI_Set;
+                OLEDUI_Stop_Output();
                 OLEDUI_Refresh();
             }
             break;
@@ -293,6 +349,27 @@ static void UI_Show_Measure(void) {
     OLED_ShowString(20, 32, "I1:", OLED_8X16);
     // OLED_ShowFloatNum(50, 32,(float)(ADC1_Value[3])*3.3f/4096.0f, 1    , 3, OLED_8X16);
     OLED_ShowFloatNum(50, 32,Ia_rms , 2, 2, OLED_8X16);
+    OLED_ShowString(20, 48, "f1:", OLED_8X16);
+    OLED_ShowFloatNum(50, 48, Line_f1, 2, 1, OLED_8X16);
+
+}
+
+/**
+ * 显示调压界面(运行中)：PB4/PB3 以 0.05V 步进调线电压给定, PB6 切回调频界面
+ * 界面布局：
+ * - 标题："调压界面"（X=15,Y=0）
+ * - Us: 给定值   Um: 实测值(Uab_rms)   f1: 当前频率
+ * 给定与实测并排显示是有意的: 调压时要盯着两个数一起看, 才知道给定加上去以后
+ * 实测跟没跟上(碰到调制限幅时给定会继续加而实测不动)。
+ */
+static void UI_Show_VoltSet(void) {
+    // 显示标题
+    OLED_ShowString(15, 0, "调压界面", OLED_8X16);
+    OLED_ShowString(20, 16, "Us:", OLED_8X16);
+    OLED_ShowFloatNum(50, 16, Line_U1_Set, 2, 2, OLED_8X16);
+    OLED_ShowString(20, 32, "Um:", OLED_8X16);
+    //整数位必须>=2(见UI_Show_Measure的说明)
+    OLED_ShowFloatNum(50, 32, Uab_rms, 2, 3, OLED_8X16);
     OLED_ShowString(20, 48, "f1:", OLED_8X16);
     OLED_ShowFloatNum(50, 48, Line_f1, 2, 1, OLED_8X16);
 

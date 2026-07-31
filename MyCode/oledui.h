@@ -7,14 +7,15 @@
 // -------------------------- UI状态枚举 --------------------------
 typedef enum {
     UI_START = 0,        // 开始界面
-    UI_Measure,   // 调频界面
+    UI_Measure,   // 运行中的调频界面(PB4/PB3 调频率, PB6 切到调压)
     UI_Set,
+    UI_VoltSet,   // 运行中的调压界面(PB4/PB3 调线电压 ±0.05V, PB6 切回调频)
 
 } UI_State;
 
 // -------------------------- 全局变量声明 --------------------------
 extern UI_State g_current_ui;  // 当前UI界面状态
-extern float Line_U1_Set;      // 输出电压（测量值：32.00V）
+extern float Line_U1_Set;      // 线电压有效值给定(默认32.00V, 调压界面PB4/PB3以0.05V步进)
 extern float Line_I1;    // I1干路电流（默认0.00A）
 extern float Line_f1;    // 频率（默认50Hz）
 extern float Line_U1_Measure;      // 输出电压（测量值：32.00V）
