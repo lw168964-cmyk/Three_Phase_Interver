@@ -21,8 +21,11 @@ UI_State g_current_ui = UI_START;                   // 默认初始界面为"开
 //折算成相电压峰值在control.c的调用处完成: Line_U1_Set*0.8164966
 float Line_U1_Set = 32.00f;   // 输出电压（设定值）
 
-/* ===== 调压界面的步进与上下限 =====
- * 步进 0.05V: 相当于 32V 上的 0.16%, PR环几个基波周期内跟上; 慢环误差项按给定值
+/* ===== 电压给定的步进与上下限 =====
+ * 两个步进值对应两个使用场景, 上下限共用:
+ *   开始界面(未启动) 0.02V —— 开机前预置目标值, 细一点方便一次到位
+ *   调压界面(运行中) 0.05V —— 运行中现场微调, 粗一点少按几次
+ * 步进 0.05V 相当于 32V 上的 0.16%, PR环几个基波周期内跟上; 慢环误差项按给定值
  * 归一化, 所以 rms_trim 会自己重新收敛, 不需要复位。
  *
  * 上限 36.00V 的来历(不是随便取的整数):
@@ -33,7 +36,8 @@ float Line_U1_Set = 32.00f;   // 输出电压（设定值）
  *   界面上看着能加实际加不上去 —— 所以在这里就拦住。
  *   注意这条上限跟着 Udc 走(60V母线), 换母线电压必须重算。
  * 下限 20.00V: 低于此值 m<0.47, 死区压降占比变大且无实际用途。 */
-#define VOLT_SET_STEP   0.05f
+#define VOLT_SET_STEP        0.05f   //运行中(调压界面)步进
+#define VOLT_INIT_STEP       0.02f   //开机前(开始界面)步进
 #define VOLT_SET_MIN    20.00f
 #define VOLT_SET_MAX    36.00f
 float Line_U1_Measure = 32.00f;   // 输出电压（测量值）(未使用,显示走Uab_rms)
@@ -183,9 +187,21 @@ void OLEDUI_Key_Handle(void) {
     switch (g_current_ui) {
         // -------------------------- 1. 开始界面按键逻辑 --------------------------
         case UI_START:
-
+            /* 开机前预置目标线电压。此时 HRTIM 未启动、控制未使能, 改的只是一个
+               普通全局量, 等 UI_Set 按 PB6 启动时软起动会从0爬到这个给定。
+               上下限与运行中调压界面共用(见 VOLT_SET_MIN/MAX 的推导)。 */
+            if (key_up) {          // PB4: 目标线电压 +0.02V
+                Line_U1_Set += VOLT_INIT_STEP;
+                if (Line_U1_Set > VOLT_SET_MAX) { Line_U1_Set = VOLT_SET_MAX; }
+                OLEDUI_Refresh();
+            }
+            if (key_down) {        // PB3: 目标线电压 -0.02V
+                Line_U1_Set -= VOLT_INIT_STEP;
+                if (Line_U1_Set < VOLT_SET_MIN) { Line_U1_Set = VOLT_SET_MIN; }
+                OLEDUI_Refresh();
+            }
             if (key_ok) {          // 确认：根据选中项进入对应参数设定界面
-                g_current_ui = UI_Set;  
+                g_current_ui = UI_Set;
                 OLEDUI_Refresh(); // 刷新到参数设定界面
             }
             if (key_back) {        // 返回：回到开始界面
