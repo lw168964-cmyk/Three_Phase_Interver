@@ -229,6 +229,9 @@ void Control_Reset(void)
 	Ia_rms = 0.0f;
 	Ia_rms_raw = 0.0f;
 	memset(&fund_Ia, 0, sizeof(fund_Ia));
+	//RMS窗口状态(含prevTheta)必须一起清:theta本行上方已归零,
+	//若实例里还留着上次停机的prevTheta,首拍会误判周期回绕(见sample.c的RMS_ResetAll)
+	RMS_ResetAll();
 
 	//慢环状态随每次启动复位,否则上次运行(可能是别的给定/负载)的修正量会
 	//在本次启动瞬间直接作用到幅值上,形成一次阶跃
@@ -289,7 +292,10 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 
 		 D=fixed_angle_update(&dianjiaodu);
 
-		 Volt_Loop_Control(Line_U1_Set*1.414f/1.732f,0,D,dianjiaodu.Fo);
+		 /* 线电压有效值 -> 相电压峰值: *sqrt2/sqrt3。
+		    原写 1.414/1.732 = 0.81640, 精确值 0.81650, 差 -0.0122%(-0.004V@32V)。
+		    慢环最终会把这点差吃掉, 但既然是常量就写准, 免得和真正的标定误差混在一起。 */
+		 Volt_Loop_Control(Line_U1_Set*0.8164966f,0,D,dianjiaodu.Fo);
 
 		 //本次中断耗时。放在最后,包含整条控制链但不含HAL的DMA分发开销。
 		 ctrl_cycles = DWT->CYCCNT - t_entry;
@@ -395,13 +401,14 @@ void Volt_Loop_Control(float des_d,float des_q,float sita,uint16_t f) //单电�
 	//printf_DMA("%f,%f,%f\n",Phase_A_out,Phase_B_out,Phase_C_out);
 
 	//8.参数计算显示
-	Uab_rms = Calculate_ACVoltage_RMS_AB(&input_volt1,f);//计算AB线电压有效值
+	//窗口以sita回绕为界(见sample.h), 与输出周期严格同步
+	Uab_rms = Calculate_ACVoltage_RMS_AB(&input_volt1,sita,f);//计算AB线电压有效值
 	//电流显示必须用基波提取, 不能用原始RMS:
 	//采样的是电感电流, 空载纹波峰峰约0.31A >> 基波峰值0.081A(C=9.9uF,32V线电压),
 	//原始RMS把纹波也算进去 -> 空载会显示成几百mA以上, 那不是负载电流。
 	Ia_rms = Fundamental_RMS_Update(&fund_Ia, input_volt1.fpPha1CrtFB, sita, f);
 	//原始RMS保留为排查用(调试器watch), 与Ia_rms的差值即纹波+噪声含量
-	Ia_rms_raw = Calculate_ACCurrent_RMS_A(&input_volt1,f);
+	Ia_rms_raw = Calculate_ACCurrent_RMS_A(&input_volt1,sita,f);
 
 	//9.闭环调制
 	Clark_Func(&clark, Phase_A_out, Phase_B_out, Phase_C_out, 1);

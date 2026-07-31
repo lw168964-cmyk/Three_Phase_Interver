@@ -12,37 +12,61 @@ void RMS_Init(RMS_Calculator *calc)
     memset(calc, 0, sizeof(RMS_Calculator));
 }
 
-// 更新采样值并计算有效值 (20 kHz control callback)
-float RMS_Update(RMS_Calculator *calc, float newSample , uint16_t f) 
+/* 更新采样值并计算有效值 (20 kHz control callback)。
+   窗口以电角度回绕为界(见sample.h的结构体说明), 结果是近 RMS_AVG_PERIODS 个
+   基波周期的合并 RMS = sqrt(sum(平方和) / sum(点数))。
+   各周期点数可能相差一个采样点(如60Hz在333/334之间跳), 所以必须分别记录点数后
+   一起除, 不能对各周期的 RMS 再取平均 —— 那样加权是错的。 */
+float RMS_Update(RMS_Calculator *calc, float newSample, float theta, uint16_t f)
 {
-	uint16_t a = (ADC_SAMPLE_RATE + f / 2) / f;//四舍五入 
-	
-	if(a>=RMS_SAMPLE_COUNT)
-	{
-		a = RMS_SAMPLE_COUNT;
-	}
-    // 频率变化 → 强制重置缓冲区
+    // 频率变化 → 强制重置(窗口长度随之改变,旧周期的和不能再混进来)
     if(f != calc->lastFreq)
     {
-        calc->lastFreq = f;       // 记录新频率
-        calc->sumSquares = 0.0f;  // 清空平方和
-        calc->sampleIndex = 0;    // 清空索引
-    }
-    
-    // 累加平方和
-    calc->sumSquares += newSample * newSample;
-    calc->sampleBuffer[calc->sampleIndex] = newSample;
-    calc->sampleIndex++;
-    
-    // 当累积到一周期的样本时，计算RMS并重置
-    if(calc->sampleIndex >= a)
-    {
-        calc->lastRMS = sqrtf(calc->sumSquares / a);
+        calc->lastFreq = f;
         calc->sumSquares = 0.0f;
         calc->sampleIndex = 0;
-        return calc->lastRMS;
+        calc->ringIndex = 0;
+        calc->ringFill = 0;
     }
-    
+
+    // 累加平方和
+    calc->sumSquares += newSample * newSample;
+    if (calc->sampleIndex < RMS_SAMPLE_COUNT)
+    {
+        calc->sampleIndex++;
+    }
+
+    /* 周期边界: theta 回绕(本次小于上次)。
+       保护: theta 因故不回绕时, 到点数上限也强制结束, 避免和无限增长。 */
+    const uint8_t wrapped = (theta < calc->prevTheta) ? 1U : 0U;
+    calc->prevTheta = theta;
+
+    if (wrapped || (calc->sampleIndex >= RMS_SAMPLE_COUNT))
+    {
+        calc->periodSum[calc->ringIndex] = calc->sumSquares;
+        calc->periodN[calc->ringIndex]   = calc->sampleIndex;
+        calc->ringIndex = (uint8_t)((calc->ringIndex + 1U) % RMS_AVG_PERIODS);
+        if (calc->ringFill < RMS_AVG_PERIODS)
+        {
+            calc->ringFill++;   //启动阶段只用已填充的部分,第一个周期结束就有有效值
+        }
+
+        float totSum = 0.0f;
+        uint32_t totN = 0U;
+        for (uint8_t i = 0U; i < calc->ringFill; i++)
+        {
+            totSum += calc->periodSum[i];
+            totN   += calc->periodN[i];
+        }
+        if (totN != 0U)
+        {
+            calc->lastRMS = sqrtf(totSum / (float)totN);
+        }
+
+        calc->sumSquares = 0.0f;
+        calc->sampleIndex = 0;
+    }
+
     // 周期未满时返回上一次的RMS值
     return calc->lastRMS;
 }
@@ -87,24 +111,32 @@ float Fundamental_RMS_Update(FUND_RMS *s, float sample, float theta, uint16_t f)
 }
 
 float F=0;
-//计算A相交流电流有效值(线电流)
-float Calculate_ACCurrent_RMS_A(ST_ELEC_OBS *pstM,uint16_t f) 
+
+/* 三个RMS实例提到文件作用域, 使Control_Reset能统一清零(见RMS_ResetAll)。
+   原先放在函数内的static + isInitialized 无法从外部复位: 每次重新启动时 theta
+   回到0而实例里的 prevTheta 还是上次停机时的大值, 首拍就误判为周期回绕,
+   结束一个只有1个采样点的窗口, 这个坏值要在环形缓冲里存在K个周期。
+   零初始化本身已等价于 RMS_Init(memset清零), 故不再需要首次调用判断。 */
+static RMS_Calculator rmsCalc1;   //Uab
+static RMS_Calculator rmsCalc2;   //Ubc
+static RMS_Calculator rmsCalc3;   //Ia(原始RMS)
+
+//全部RMS状态复位, 由Control_Reset在每次启动时调用
+void RMS_ResetAll(void)
 {
-    static RMS_Calculator rmsCalc3;
-    static uint8_t isInitialized = 0;
-    
-    // 首次调用时初始化
-    if (!isInitialized) 
-	{
-        RMS_Init(&rmsCalc3);
-        isInitialized = 1;
-    }
-    
+    RMS_Init(&rmsCalc1);
+    RMS_Init(&rmsCalc2);
+    RMS_Init(&rmsCalc3);
+}
+
+//计算A相交流电流有效值(线电流)
+float Calculate_ACCurrent_RMS_A(ST_ELEC_OBS *pstM,float theta,uint16_t f)
+{
     //瞬时值已由控制环在本周期开头统一采样,这里不能再调一次:
     //Cal_*内含滤波器/零点跟踪状态,重复调用会让滤波器每周期被推进两次
     F= pstM->fpPha1CrtFB;
     // 更新RMS计算并返回有效值
-    return RMS_Update(&rmsCalc3,pstM->fpPha1CrtFB,f);
+    return RMS_Update(&rmsCalc3,pstM->fpPha1CrtFB,theta,f);
 }
 //交流侧电流采样A(线电流)
 void Cal_ACCurrent_A(ST_ELEC_OBS *pstM)
@@ -127,37 +159,17 @@ void Cal_ACCurrent_C(ST_ELEC_OBS *pstM)
 }
 
 //计算交流电压有效值 Uab
-float Calculate_ACVoltage_RMS_AB(ST_ELEC_OBS *pstM,uint16_t f) 
+float Calculate_ACVoltage_RMS_AB(ST_ELEC_OBS *pstM,float theta,uint16_t f)
 {
-    static RMS_Calculator rmsCalc1;
-    static uint8_t isInitialized = 0;
-    
-    // 首次调用时初始化
-    if (!isInitialized) 
-	{
-        RMS_Init(&rmsCalc1);
-        isInitialized = 1;
-    }
-    
     //瞬时值已由控制环在本周期开头统一采样,不能重复调用(见Cal_ACVolt_AB内的滤波状态)
-    return RMS_Update(&rmsCalc1,pstM->fpABVolt,f);
+    return RMS_Update(&rmsCalc1,pstM->fpABVolt,theta,f);
 }
 
 //计算交流电压有效值 Ubc
-float Calculate_ACVoltage_RMS_BC(ST_ELEC_OBS *pstM,uint16_t f) 
+float Calculate_ACVoltage_RMS_BC(ST_ELEC_OBS *pstM,float theta,uint16_t f)
 {
-    static RMS_Calculator rmsCalc2;
-    static uint8_t isInitialized = 0;
-    
-    // 首次调用时初始化
-    if (!isInitialized) 
-	{
-        RMS_Init(&rmsCalc2);
-        isInitialized = 1;
-    }
-    
     //瞬时值已由控制环在本周期开头统一采样,不能重复调用
-    return RMS_Update(&rmsCalc2,pstM->fpBCVolt,f);
+    return RMS_Update(&rmsCalc2,pstM->fpBCVolt,theta,f);
 }
 
 /* AB线电压
@@ -169,7 +181,8 @@ float Calculate_ACVoltage_RMS_BC(ST_ELEC_OBS *pstM,uint16_t f)
    非线性环节。既然增益不能改, 这条就是输出电压不宜再往上提的原因。 */
 void Cal_ACVolt_AB(ST_ELEC_OBS *pstM)
 {
-	float raw = (float)((ADC1_Value[0])*3.3f/4096.0f-1.640f)*35.1617f;
+	//VOLT_SENSE_TRIM: 整链路残余增益修正, 两路同乘同一常数(见sample.h)
+	float raw = (float)((ADC1_Value[0])*3.3f/4096.0f-1.640f)*35.1617f*VOLT_SENSE_TRIM;
 	//1.慢速跟踪并扣除零点:零点误差经前馈会变成输出直流分量(实测Ua有-1.96%直流)
 	pstM->fpABVoltDC += DC_TRACK_K * (raw - pstM->fpABVoltDC);
 	raw -= pstM->fpABVoltDC;
@@ -186,7 +199,8 @@ void Cal_ACVolt_BC(ST_ELEC_OBS *pstM)
 	   去调节, 会主动把输出调成三相不对称, 而THD指标看不出来。
 	   零点偏差(1.644 vs 1.656)由DC_TRACK慢跟踪消除, 无需强求一致。
 	   若两路实际分压比确有差异, 应在硬件上配对电阻, 而不是在这里补偿。 */
-	float raw = (float)((ADC1_Value[2])*3.3f/4096.f-1.640f)*35.3857f;
+	//VOLT_SENSE_TRIM 与AB路严格同值, 否则重构相电压里会出现负序(见上面注释)
+	float raw = (float)((ADC1_Value[2])*3.3f/4096.f-1.640f)*35.3857f*VOLT_SENSE_TRIM;
 	pstM->fpBCVoltDC += DC_TRACK_K * (raw - pstM->fpBCVoltDC);
 	raw -= pstM->fpBCVoltDC;
 	pstM->fpBCVolt += VOLT_FILT_K * (raw - pstM->fpBCVolt);

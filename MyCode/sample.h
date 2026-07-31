@@ -5,12 +5,44 @@
 #include "suanfa.h"
 
 #define ADC_SAMPLE_RATE  CTRL_FREQUENCY
-/* 20 Hz at 20 kHz requires 1000 samples per period.
-   !! 这个值刚好卡满, 没有裕度 !! RMS_Update 的窗口 a=fs/f 被钳在此值以内,
-   面板频率下限 20Hz 时 a=1000 正好等于上限; 若再降开关频率下限或提到 40kHz,
-   必须同步加大此值, 否则窗口被截断, RMS 不再是整周期有效值。
-   (40kHz 需要 2000, 三个实例的 RAM 从 12kB 涨到 24kB) */
-#define RMS_SAMPLE_COUNT 1000U
+
+/* ===== 线电压采样标定修正 =====
+ * 两路线电压的硬件增益(35.1617 / 35.3857)是按各自通道标定出来的, 但整条链路
+ * (分压电阻 + 运放 + VDDA 基准)仍有零点几个百分点的残余增益误差。
+ * 这个误差是致命的: Uab_rms 同时是慢环反馈"和" OLED 显示源, 所以环路会把
+ * 一个偏高的读数拉到 32.00, OLED 也跟着显示 32.00, 而真实输出停在 32.00/c 以下
+ * —— 表面看闭环收敛得很好, 实际就是差了这个比例。
+ *
+ * 实测(万用表 vs OLED, 二者都显示/读 32.00):
+ *   60Hz: 真实 31.91~31.92  -> c = 31.915/32.00 = 0.99734
+ *   30Hz: 真实 31.89        -> c = 31.890/32.00 = 0.99656
+ * 两点差 0.06%, 其中 ±0.05% 是下面 RMS 窗口截断抖动(60Hz 最严重), 不是真实增益差,
+ * 所以取中值 0.996875 一个常数覆盖全频段:
+ *   修正后 60Hz 真实 32.015V, 30Hz 真实 31.990V, 都在 ±0.1V 内。
+ *
+ * !! 必须两路同乘同一个常数 !! sample.c:215 用 Uab/Ubc 重构三相相电压,
+ * 只改一路等于给反馈注入 0.09% 负序, PR 环会照着这个假不平衡去调, 反而恶化其余两个线电压。
+ * 换硬件/换采样板后重新按上面的方法测一次即可, 不要动 35.1617/35.3857。 */
+#define VOLT_SENSE_TRIM  0.996875f
+
+/* RMS 窗口累计的基波周期数(滑动平均, 不改变慢环每周期更新一次的节奏)。
+ * 为什么需要 >1: 窗口只能是整数个采样点, 而一个基波周期是 fs/f 个点, 一般不是整数。
+ * 截断的那零点几个点让 RMS 结果带上 ±(1/2N)*|sum cos| 的偏差, 且因为窗口起始相位
+ * 逐周期缓慢游走, 这个偏差表现为几秒周期的慢漂 —— 慢环时间常数 1s, 会跟着漂,
+ * 直接吃掉 ±0.1V 指标的一部分, 也让台面上标定读数抓不准。
+ * 误差严格按 1/K 缩小(数值扫 20~100Hz 验证):
+ *   K=1 最差 0.040V(75Hz) | K=2 0.020V | K=4 0.010V | K=8 0.005V
+ * 取 K=4: 最差 0.010V(占指标 10%), 滞后 K/2=2 个基波周期(60Hz 33ms),
+ * 相对慢环 50 周期的时间常数可忽略。
+ * 注: 20/50/100Hz 处 fs/f 本就是整数, 任何 K 都精确, 抖动为 0。 */
+#define RMS_AVG_PERIODS  4U
+
+/* 单个基波周期的采样点数上限(仅作保护, 防止 theta 因故不回绕时无限累加)。
+   面板频率下限 20Hz @20kHz = 1000 点, 留 10% 余量取 1100:
+   窗口一旦撞上这个上限就不是整周期了(RMS 变成部分周期值), 所以它必须大于
+   最低频率对应的周期点数, 不能刚好卡满。
+   现在只存 (和, 点数), 不再存采样数组, 所以放大这个值几乎不花 RAM。 */
+#define RMS_SAMPLE_COUNT 1100U
 
 //零点慢速跟踪系数:fc = K*fs/(2*pi) 约0.48Hz,扣除采样零点漂移(输出直流分量的来源)
 //50Hz处衰减可忽略,相移仅0.5度
@@ -90,22 +122,32 @@ typedef struct
 } ST_ELEC_OBS;
 
 
-//有效值计算结构体
+/* 有效值计算结构体。
+   窗口边界由控制环电角度 theta 的回绕给出, 不再用 a=fs/f 估算:
+   theta 就是生成输出电压的那个累加器, 它的回绕点即真实输出周期边界, 天然同步,
+   且与面板频率整数值无关(f 只用于检测频率切换时清状态)。
+   原先的 sampleBuffer[1000] 只写不读, 已删除 —— 省 12kB RAM(三个实例)和每次中断
+   一次无用的数组写。 */
 typedef struct {
-    float sampleBuffer[RMS_SAMPLE_COUNT];  // 存储一个周期的采样值
-    uint16_t sampleIndex;                  // 当前采样位置
-    float sumSquares;                      // 平方累加和
-    uint8_t isBufferFull;                  // 缓冲区已满标志
+    float periodSum[RMS_AVG_PERIODS];      // 近K个基波周期各自的平方和
+    uint16_t periodN[RMS_AVG_PERIODS];     // 对应各周期的采样点数(可能相差1个点)
+    uint8_t  ringIndex;                    // 环形写指针
+    uint8_t  ringFill;                     // 已填充的周期数(<=K, 用于启动阶段)
+    uint16_t sampleIndex;                  // 本周期已累加点数
+    float sumSquares;                      // 本周期平方累加和
 	uint16_t lastFreq;  // 保存上一次频率，用于检测变化
 	float lastRMS;     // 保存上一次的RMS值
+	float prevTheta;   // 上一次的电角度,用于检测周期回绕
 } RMS_Calculator;
 
 
 void RMS_Init(RMS_Calculator *calc);// 初始化RMS计算器
-float RMS_Update(RMS_Calculator *calc, float newSample , uint16_t f) ;// 更新采样值并计算有效值
+void RMS_ResetAll(void);// 复位全部RMS实例(Uab/Ubc/Ia),每次启动由Control_Reset调用
+//theta: 控制环电角度, 其回绕即窗口边界
+float RMS_Update(RMS_Calculator *calc, float newSample, float theta, uint16_t f);
 
 
-float Calculate_ACCurrent_RMS_A(ST_ELEC_OBS *pstM,uint16_t f);//计算A相线电流有效值
+float Calculate_ACCurrent_RMS_A(ST_ELEC_OBS *pstM,float theta,uint16_t f);//计算A相线电流有效值
 
 /* 基波有效值提取(同步解调)。
    背景: 采样点取的是电感电流, 空载时开关纹波峰峰约0.31A(∝Udc, 60V档), 而基波
@@ -118,8 +160,8 @@ float Calculate_ACCurrent_RMS_A(ST_ELEC_OBS *pstM,uint16_t f);//计算A相线电
    量化噪声因与基波不相关而被积分平均掉。theta 直接用控制环的电角度, 天然同步。 */
 float Fundamental_RMS_Update(FUND_RMS *s, float sample, float theta, uint16_t f);
 
-float Calculate_ACVoltage_RMS_AB(ST_ELEC_OBS *pstM,uint16_t f); //计算交流电压有效值 Uab
-float Calculate_ACVoltage_RMS_BC(ST_ELEC_OBS *pstM,uint16_t f); //计算交流电压有效值 Ubc
+float Calculate_ACVoltage_RMS_AB(ST_ELEC_OBS *pstM,float theta,uint16_t f); //计算交流电压有效值 Uab
+float Calculate_ACVoltage_RMS_BC(ST_ELEC_OBS *pstM,float theta,uint16_t f); //计算交流电压有效值 Ubc
 
 
 void Cal_ACCurrent_A(ST_ELEC_OBS *pstM);//A相交流电流瞬时值

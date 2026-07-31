@@ -157,12 +157,15 @@ void OLEDUI_Key_Handle(void) {
 
             // -------------------------- 2. 参数设定显示界面按键逻辑 --------------------------
         case UI_Set:
-            if (key_up && Line_f1 <= 100) {  // 增加：频率+1（上限100Hz）
+            /* 边界用 < / > 而非 <= / >=: 原写法在 Line_f1 恰为 100 时还允许 +1 到 101,
+               恰为 20 时还允许 -1 到 19。19Hz 一个周期 1052 点, 会顶到 RMS 窗口
+               的点数上限, 窗口不再是整周期, 有效值读数随之偏掉。 */
+            if (key_up && Line_f1 < 100) {  // 增加：频率+1（上限100Hz）
                 Line_f1 = Line_f1 + 1.0f;
 							OLEDUI_Apply_Freq();
                 OLEDUI_Refresh(); // 刷新参数显示
             }
-            if (key_down && Line_f1 >= 20) { // 减少：频率-1（下限20Hz）
+            if (key_down && Line_f1 > 20) { // 减少：频率-1（下限20Hz）
                 Line_f1 = Line_f1 - 1.0f;
 							OLEDUI_Apply_Freq();
                 OLEDUI_Refresh(); // 刷新参数显示
@@ -196,12 +199,13 @@ void OLEDUI_Key_Handle(void) {
             break;
             // -------------------------- 3. 参数测量显示界面按键逻辑 --------------------------
         case UI_Measure:
-            if (key_up && Line_f1 <= 100) {  // 增加：频率+1（上限100Hz）
+            //边界同 UI_Set, 见那里的说明
+            if (key_up && Line_f1 < 100) {  // 增加：频率+1（上限100Hz）
                 Line_f1 = Line_f1 + 1.0f;
 							OLEDUI_Apply_Freq();
                 OLEDUI_Refresh(); // 刷新参数显示
             }
-            if (key_down && Line_f1 >= 20) { // 减少：频率-1（下限20Hz）
+            if (key_down && Line_f1 > 20) { // 减少：频率-1（下限20Hz）
                 Line_f1 = Line_f1 - 1.0f;
 							OLEDUI_Apply_Freq();
                 OLEDUI_Refresh(); // 刷新参数显示
